@@ -1,3 +1,7 @@
+ast.json
+code.txt
+out.js
+tokens.txt
 # Logs
 logs
 *.log
