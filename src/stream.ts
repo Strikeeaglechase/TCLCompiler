@@ -10,6 +10,11 @@ class Stream<T> {
 		return this.items[this.index];
 	}
 
+	// This being required feels bad
+	peekOver(): T {
+		return this.items[this.index + 1];
+	}
+
 	readUntil(value: T): T[] {
 		const result: T[] = [];
 		while (!this.eof() && this.peek() != value) {

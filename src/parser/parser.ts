@@ -252,23 +252,35 @@ class Parser {
 		return structStatement;
 	}
 
-	private handleInlineAssignment() {
-		const next = this.tokens.peek();
+	private getStructInlineKeys() {
+		const keys: { name: string; value: AST }[] = [];
+		while (!this.maybeConsume(TokenType.Symbol, "}")) {
+			const key = this.tokens.next();
 
-		if (next.type == TokenType.Identifier) {
-			// Struct assignment
-			const keys: { name: string; value: AST }[] = [];
-			while (true) {
-				const key = this.tokens.next();
-				if (key.type == TokenType.Symbol && key.value == "}") break;
-
-				this.tokens.next(); // Read :
+			this.tokens.next(); // Read :
+			if (this.maybeConsume(TokenType.Symbol, "{")) {
+				const subStructKeys = this.getStructInlineKeys();
+				subStructKeys.forEach(subKey => {
+					keys.push({ name: `${key.value}.${subKey.name}`, value: subKey.value });
+				});
+			} else {
 				const value = this.parseAst();
 				keys.push({ name: key.value, value: value });
-				const next = this.tokens.peek();
-				if (next.type == TokenType.Symbol && next.value == ",") this.tokens.next();
 			}
 
+			this.maybeConsume(TokenType.Symbol, ",");
+		}
+
+		return keys;
+	}
+
+	private handleInlineAssignment() {
+		const next = this.tokens.peek();
+		const after = this.tokens.peekOver();
+
+		if (next.type == TokenType.Identifier && after.type == TokenType.Symbol && after.value == ":") {
+			// Struct assignment
+			const keys = this.getStructInlineKeys();
 			const structAssignment: ASTInlineStructAssignment = {
 				type: ASTType.InlineStructAssignment,
 				keys: keys
@@ -345,10 +357,9 @@ class Parser {
 	private handleBinaryOperation(leftHand: AST, prec = 0) {
 		const operator = this.tokens.peek();
 		if (!operator || operator.type != TokenType.Operand) {
-			// if (operator && operator.type == TokenType.Symbol && operator.value == ")") this.tokens.next();
-
 			return leftHand;
 		}
+
 		this.tokens.next();
 
 		const opPrec = operandPrecedence[operator.value];
@@ -488,12 +499,11 @@ class Parser {
 	private handleFunctionCall(ref: ASTReference) {
 		this.tokens.next(); // Read (
 		const args: AST[] = [];
-		while (!this.tokens.eof() && this.tokens.peek().value != ")") {
+		while (!this.maybeConsume(TokenType.Symbol, ")")) {
+			this.maybeConsume(TokenType.Symbol, ",");
 			const ast = this.parseAst();
 			args.push(ast);
 		}
-
-		this.tokens.next(); // Read )
 
 		const funcCall: ASTFunctionCall = {
 			type: ASTType.FunctionCall,
@@ -550,21 +560,21 @@ class Parser {
 
 		const params: { type: string; name: string }[] = [];
 		const body: AST[] = [];
-		while (this.tokens.peek().value != ")") {
+		while (!this.maybeConsume(TokenType.Symbol, ")")) {
+			this.maybeConsume(TokenType.Symbol, ",");
+
 			const paramType = this.tokens.next();
 			const paramName = this.tokens.next();
 			params.push({ type: paramType.value, name: paramName.value });
 		}
 
-		this.tokens.next(); // Read )
 		const openBracket = this.tokens.peek(); // Peak for {
 
 		if (openBracket.type == TokenType.Symbol && openBracket.value == "{") {
 			this.tokens.next(); // Read {
-			while (this.tokens.peek().value != "}") {
+			while (!this.maybeConsume(TokenType.Symbol, "}")) {
 				body.push(this.parseAst());
 			}
-			this.tokens.next(); // Read }
 		} else {
 			const returnAst: ASTReturn = {
 				type: ASTType.Return,
@@ -582,6 +592,21 @@ class Parser {
 		};
 
 		return func;
+	}
+
+	private maybeConsume(type: TokenType, value: string) {
+		const next = this.tokens.peek();
+		if (next.type == type && next.value == value) {
+			this.tokens.next();
+			return true;
+		}
+
+		return false;
+	}
+
+	private throwIfNotConsume(type: TokenType, value: string) {
+		const consumed = this.maybeConsume(type, value);
+		if (!consumed) throw new Error(`Expected ${type} ${value}`);
 	}
 }
 

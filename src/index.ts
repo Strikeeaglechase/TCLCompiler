@@ -1,9 +1,9 @@
 import fs from "fs";
 
+import { JSCompiler } from "./jsCompiler/jsCompiler.js";
 import { Parser } from "./parser/parser.js";
 import { Tokenizer } from "./parser/tokenizer.js";
 import { Stream } from "./stream.js";
-import { JSCompiler } from "./jsCompiler.js";
 
 let file: string;
 if (fs.existsSync("./code.txt")) file = fs.readFileSync("./code.txt", "utf-8");
