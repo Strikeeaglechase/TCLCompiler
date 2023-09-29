@@ -1,0 +1,32 @@
+// EXPECT: 5
+// EXPECT: 6
+// EXPECT: 17
+
+struct SubStruct {
+	int z;
+
+	void display() {
+		print(this->z);
+	}
+}
+
+struct Point {
+	int x;
+	int y;
+
+	SubStruct* sub;
+
+	void display() {
+		print(this->x);
+		print(this->y);
+		this->sub.display();
+	}
+}
+
+int a = 5;
+int b = 6;
+int c = 17;
+SubStruct sub = {z: c};
+Point pt = {x: a, y: b, sub: &sub};
+
+pt.display();
