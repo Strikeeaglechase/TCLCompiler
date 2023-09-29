@@ -1,0 +1,8 @@
+// EXPECT: 165
+
+int x = 24;
+int* addrX = &x;
+
+*addrX = 165;
+
+print(x);

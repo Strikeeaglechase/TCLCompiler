@@ -1,0 +1,9 @@
+// EXPECT: 1
+// EXPECT: 2
+// EXPECT: 3
+// EXPECT: 4
+// EXPECT: 5
+
+int[5] arr = { 1, 2, 3, 4, 5 };
+
+print(arr[0], arr[1], arr[2], arr[3], arr[4]);

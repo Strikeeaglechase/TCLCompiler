@@ -1,0 +1,12 @@
+// EXPECT: 187
+
+struct Point {
+	int x;
+	int[5] arr;
+}
+
+Point pt = {};
+pt.arr[2] = 187;
+int x = pt.arr[2];
+
+print(x);

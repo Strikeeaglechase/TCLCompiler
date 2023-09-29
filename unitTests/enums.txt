@@ -1,0 +1,11 @@
+// EXPECT: 0
+// EXPECT: 1
+// EXPECT: 42
+
+enum Test {
+	a,
+	b,
+	c: 42
+}
+
+print(Test.a, Test.b, Test.c);

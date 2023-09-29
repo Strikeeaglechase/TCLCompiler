@@ -23,7 +23,8 @@ class UnitTester {
 
 	private runTest(testFile: string) {
 		const file = fs.readFileSync(`../unitTests/${testFile}`, "utf-8");
-		const expected = file.match(/\/\/ EXPECT: (\d+)/)[1];
+		const expectedMatch = file.matchAll(/\/\/ EXPECT: (\d+)/g);
+		const expected = [...expectedMatch].map(m => m[1]);
 
 		const stream = new Stream(file.trim().split(""));
 		const tokenizer = new Tokenizer(stream);
@@ -34,10 +35,16 @@ class UnitTester {
 		const js = compiler.compile(ast);
 
 		fs.writeFileSync(`../unitTests/outs/${testFile}.js`, js);
-		const result = execSync(`node ../unitTests/outs/${testFile}.js`).toString().trim();
-		if (result != expected) {
-			console.error(`Test ${testFile} failed! Expected ${expected}, got ${result}`);
-		}
+		const result = execSync(`node ../unitTests/outs/${testFile}.js`).toString().trim().split("\n");
+		let allPass = true;
+		expected.forEach((e, i) => {
+			if (e != result[i]) {
+				console.log(`Test ${testFile} failed on case ${i}, expected ${e} but got ${result[i]}`);
+				allPass = false;
+			}
+		});
+
+		if (allPass) console.log(`Test ${testFile} passed`);
 	}
 }
 

@@ -10,7 +10,7 @@
 		"sourceMap": true,
 		"outDir": "dist/",
 		"lib": [
-			"ES2019",
+			"ES2022",
 			"DOM"
 		]
 	},

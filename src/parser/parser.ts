@@ -197,22 +197,20 @@ class Parser {
 		this.tokens.next(); // Read {
 
 		let index = 0;
-		while (!this.tokens.eof() && this.tokens.peek().value != "}") {
+		while (!this.maybeConsume(TokenType.Symbol, "}")) {
 			const name = this.tokens.next().value;
 			const colon = this.tokens.peek();
 			if (colon.type == TokenType.Symbol && colon.value == ":") {
 				this.tokens.next(); // Read :
 				const value = this.tokens.next().value;
-				values.push({ name: name, value: Number(value) });
+				values.push({ name: name.trim(), value: Number(value) });
 			} else {
-				values.push({ name: name, value: index });
+				values.push({ name: name.trim(), value: index });
 			}
 
 			index++;
-			this.tokens.next(); // Read ;
+			this.maybeConsume(TokenType.Symbol, ",");
 		}
-
-		this.tokens.next(); // Read }
 
 		const enumStatement: ASTEnumStatement = {
 			type: ASTType.EnumStatement,
@@ -233,6 +231,13 @@ class Parser {
 		while (this.tokens.peek().value != "}") {
 			const type = this.tokens.next().value;
 			const isPointerType = this.maybeConsume(TokenType.Operand, "*");
+			const isArrayType = this.maybeConsume(TokenType.Symbol, "[");
+			let arraySizeExpression: AST = null;
+			if (isArrayType) {
+				arraySizeExpression = this.parseAst();
+				this.throwIfNotConsume(TokenType.Symbol, "]");
+			}
+
 			const name = this.tokens.next().value;
 
 			const next = this.tokens.peek();
@@ -240,7 +245,7 @@ class Parser {
 				const retType = this.parseKnownSingleTokenReference(type, isPointerType);
 				methods.push(this.handleFunctionDeclaration(name, retType));
 			} else {
-				keys.push({ name: name, type: type, isPointer: isPointerType });
+				keys.push({ name: name, type: type, arrExpr: arraySizeExpression, isPointer: isPointerType || isArrayType });
 				this.tokens.next(); // Read ;
 			}
 		}
@@ -471,9 +476,9 @@ class Parser {
 					arrayIndex: expression,
 					key: null,
 					child: null,
-					dereference: false
+					dereference: true
 				};
-
+				// ref.dereference = true;
 				ref.child = newRef;
 				ref = newRef;
 			}

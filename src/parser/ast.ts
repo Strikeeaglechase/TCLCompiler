@@ -26,6 +26,7 @@ export interface TypedKey {
 	name: string;
 	type: string;
 	isPointer: boolean;
+	arrExpr?: AST;
 }
 
 export interface ASTProg {

@@ -1,0 +1,32 @@
+// EXPECT: 31
+// EXPECT: 72
+
+struct SubStruct {
+	int z;
+}
+
+struct PointWithSubPtr {
+	int x;
+	int y;
+
+	SubStruct* sub;
+}
+
+struct Point {
+	int x;
+	int y;
+
+	SubStruct sub;
+}
+
+
+SubStruct sub = {z: 31};
+PointWithSubPtr pt = {x: 42, y: 2, sub: &sub};
+PointWithSubPtr* pointSubPtr = &pt;
+int x = pointSubPtr->sub->z;
+print(x);
+
+Point pointDirect = {x: 42, y: 2, sub: {z: 72}};
+Point* pointDirectPtr = &pointDirect;
+int y = pointDirectPtr->sub.z;
+print(y);
