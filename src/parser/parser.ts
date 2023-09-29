@@ -13,16 +13,19 @@ import {
 	ASTProg,
 	ASTReference,
 	ASTReturn,
+	ASTSemi,
 	ASTString,
 	ASTStructStatement,
 	ASTType,
 	ASTVariableAssignment,
 	ASTVariableDeclaration,
-	ASTWhileStatement
+	ASTWhileStatement,
+	TypedKey
 } from "./ast.js";
 import { operandPrecedence, Token, TokenType } from "./tokenizer.js";
 
 class Parser {
+	private types: string[] = ["void", "int"];
 	constructor(private tokens: Stream<Token>) {}
 
 	public parse() {
@@ -68,13 +71,14 @@ class Parser {
 		}
 
 		const next = this.tokens.peek();
+		// console.log(`Ending out ${token.type} ${token.value}, next is ${next?.type} ${next?.value}`);
 		if (!next) return result;
-		if (next.type == TokenType.Symbol && next.value == ";") {
-			this.tokens.next();
-			return result;
-		}
+		// if (next.type == TokenType.Symbol && next.value == ";") {
+		// 	this.tokens.next();
+		// 	return result;
+		// }
 
-		if (next.type == TokenType.Operand) {
+		if (next.type == TokenType.Operand && token.type != TokenType.Symbol && token.value != ";") {
 			return this.handleBinaryOperation(result);
 		}
 
@@ -221,21 +225,22 @@ class Parser {
 
 	private handleStructStatement() {
 		const name = this.tokens.next().value;
-		const keys: { name: string; type: string }[] = [];
+		const keys: TypedKey[] = [];
 		const methods: ASTFunctionDeclaration[] = [];
 
 		this.tokens.next(); // Read {
 
 		while (this.tokens.peek().value != "}") {
 			const type = this.tokens.next().value;
+			const isPointerType = this.maybeConsume(TokenType.Operand, "*");
 			const name = this.tokens.next().value;
 
 			const next = this.tokens.peek();
 			if (next.type == TokenType.Symbol && next.value == "(") {
-				const retType = this.parseKnownSingleTokenReference(type);
+				const retType = this.parseKnownSingleTokenReference(type, isPointerType);
 				methods.push(this.handleFunctionDeclaration(name, retType));
 			} else {
-				keys.push({ name: name, type: type });
+				keys.push({ name: name, type: type, isPointer: isPointerType });
 				this.tokens.next(); // Read ;
 			}
 		}
@@ -248,6 +253,8 @@ class Parser {
 			keys: keys,
 			methods: methods
 		};
+
+		this.types.push(name);
 
 		return structStatement;
 	}
@@ -323,8 +330,30 @@ class Parser {
 			case "{":
 				return this.handleInlineAssignment();
 
+			case ";": {
+				const semi: ASTSemi = { type: ASTType.Semi };
+				return semi;
+			}
+
 			default:
 				throw new Error(`Unexpected symbol "${symbol.value}"`);
+		}
+	}
+
+	private handlePointerDeref() {
+		const derefRef = this.parseAst();
+		if (derefRef.type == ASTType.Reference) {
+			const deref: ASTDereference = {
+				type: ASTType.Dereference,
+				reference: derefRef
+			};
+
+			return deref;
+		}
+
+		if (derefRef.type == ASTType.VariableAssignment) {
+			derefRef.reference.dereference = true;
+			return derefRef;
 		}
 	}
 
@@ -332,13 +361,7 @@ class Parser {
 		const operand = this.tokens.next();
 		switch (operand.value) {
 			case "*": {
-				const derefRef = this.parseAst() as ASTReference;
-				const deref: ASTDereference = {
-					type: ASTType.Dereference,
-					reference: derefRef
-				};
-
-				return deref;
+				return this.handlePointerDeref();
 			}
 			case "&": {
 				const ref = this.parseAst() as ASTReference;
@@ -400,13 +423,13 @@ class Parser {
 		return str;
 	}
 
-	private parseKnownSingleTokenReference(token: string) {
+	private parseKnownSingleTokenReference(token: string, pointer: boolean) {
 		const ref: ASTReference = {
 			type: ASTType.Reference,
 			arrayIndex: null,
 			key: token,
 			child: null,
-			dereference: false
+			dereference: pointer
 		};
 
 		return ref;
@@ -470,6 +493,16 @@ class Parser {
 			return this.handleAssignment(reference);
 		}
 
+		// Identifier is a type, may be a pointer declaration
+		if (this.types.includes(identifier.value) && next.type == TokenType.Operand && next.value == "*") {
+			const after = this.tokens.peekOver();
+			if (after.type == TokenType.Identifier) {
+				this.tokens.next(); // Read *
+				reference.dereference = true;
+				return this.handleDeclaration(reference);
+			}
+		}
+
 		// Next thing is an identifier, some sort of declaration
 		if (next.type == TokenType.Identifier) {
 			return this.handleDeclaration(reference);
@@ -524,22 +557,20 @@ class Parser {
 
 		// Variable declaration
 		if (next.value == "=") return this.handleVariableDeclaration(name, ref);
-
 		// Function declaration
 		if (next.value == "(") return this.handleFunctionDeclaration(name, ref);
 	}
 
 	private handleVariableDeclaration(name: string, varTypeRef: ASTReference) {
 		this.tokens.next(); // Read =
-		let isArr = false;
 		let arraySizeExpression: AST = null;
 
 		// Type identifier is an array which really means this is an array type
 		if (varTypeRef.child && varTypeRef.child.arrayIndex) {
-			isArr = true;
 			arraySizeExpression = varTypeRef.child.arrayIndex;
 
 			varTypeRef.child = null;
+			varTypeRef.dereference = true;
 		}
 
 		const expression = this.parseAst();
@@ -548,7 +579,6 @@ class Parser {
 			name: name,
 			varType: varTypeRef,
 			expression: expression,
-			isArray: isArr,
 			arraySizeExpression: arraySizeExpression
 		};
 
@@ -558,14 +588,15 @@ class Parser {
 	private handleFunctionDeclaration(name: string, returnTypeRef: ASTReference) {
 		this.tokens.next(); // Read (
 
-		const params: { type: string; name: string }[] = [];
+		const params: TypedKey[] = [];
 		const body: AST[] = [];
 		while (!this.maybeConsume(TokenType.Symbol, ")")) {
 			this.maybeConsume(TokenType.Symbol, ",");
 
 			const paramType = this.tokens.next();
+			const isPointer = this.maybeConsume(TokenType.Operand, "*");
 			const paramName = this.tokens.next();
-			params.push({ type: paramType.value, name: paramName.value });
+			params.push({ type: paramType.value, name: paramName.value, isPointer: isPointer });
 		}
 
 		const openBracket = this.tokens.peek(); // Peak for {

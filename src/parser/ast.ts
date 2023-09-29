@@ -18,7 +18,14 @@ export enum ASTType {
 	InlineArrayAssignment = "InlineArrayAssignment",
 	Reference = "Reference",
 	GetAddress = "GetAddress",
-	Dereference = "Dereference"
+	Dereference = "Dereference",
+	Semi = "Semi"
+}
+
+export interface TypedKey {
+	name: string;
+	type: string;
+	isPointer: boolean;
 }
 
 export interface ASTProg {
@@ -48,7 +55,6 @@ export interface ASTVariableDeclaration {
 	type: ASTType.VariableDeclaration;
 	name: string;
 	varType: ASTReference;
-	isArray: boolean;
 	arraySizeExpression: AST | null;
 	expression: AST;
 }
@@ -78,7 +84,7 @@ export interface ASTFunctionDeclaration {
 	type: ASTType.FunctionDeclaration;
 	name: string;
 	returnType: ASTReference;
-	parameters: { name: string; type: string }[];
+	parameters: TypedKey[];
 	body: AST[];
 }
 
@@ -128,7 +134,7 @@ export interface ASTStructStatement {
 	type: ASTType.StructStatement;
 	name: string;
 
-	keys: { name: string; type: string }[];
+	keys: TypedKey[];
 
 	methods: ASTFunctionDeclaration[];
 }
@@ -141,6 +147,10 @@ export interface ASTInlineStructAssignment {
 export interface ASTInlineArrayAssignment {
 	type: ASTType.InlineArrayAssignment;
 	values: AST[];
+}
+
+export interface ASTSemi {
+	type: ASTType.Semi;
 }
 
 export type AST =
@@ -163,4 +173,5 @@ export type AST =
 	| ASTInlineArrayAssignment
 	| ASTReference
 	| ASTGetAddress
-	| ASTDereference;
+	| ASTDereference
+	| ASTSemi;

@@ -1,0 +1,14 @@
+// EXPECT: 42
+
+struct Point {
+	int x;
+	int y;
+}
+
+Point pt = {x: 42, y: 2};
+
+Point* point = &pt;
+
+int x = point->x;
+
+print(x);

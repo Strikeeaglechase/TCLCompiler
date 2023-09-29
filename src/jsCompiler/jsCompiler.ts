@@ -1,8 +1,10 @@
 import {
 	AST,
 	ASTBinaryOperation,
+	ASTDereference,
 	ASTFunctionCall,
 	ASTFunctionDeclaration,
+	ASTGetAddress,
 	ASTIfStatement,
 	ASTInlineArrayAssignment,
 	ASTInlineStructAssignment,
@@ -13,7 +15,8 @@ import {
 	ASTStructStatement,
 	ASTType,
 	ASTVariableAssignment,
-	ASTVariableDeclaration
+	ASTVariableDeclaration,
+	TypedKey
 } from "../parser/ast.js";
 import { builtInFunctions } from "./builtInFunctions.js";
 
@@ -21,18 +24,33 @@ interface Compiler {
 	compile(ast: ASTProg): string;
 }
 
+enum TypeKind {
+	Struct,
+	BuiltIn,
+	Pointer
+}
+
 interface StructType {
+	kind: TypeKind.Struct;
 	name: string;
 	fields: { type: Type; name: string; offset: number }[];
 	size: number;
 }
 
 interface BuiltInType {
+	kind: TypeKind.BuiltIn;
 	name: string;
 	size: number;
 }
 
-type Type = StructType | BuiltInType;
+interface PointerType {
+	kind: TypeKind.Pointer;
+	baseType: Type;
+	size: 1;
+	name: string;
+}
+
+type Type = StructType | BuiltInType | PointerType;
 
 interface Variable {
 	name: string;
@@ -51,7 +69,10 @@ class Context {
 
 	public getVariable(name: string): Variable {
 		if (this.variables[name]) return this.variables[name];
-		if (this.parent) return this.parent.getVariable(name);
+		// if (this.parent) {
+		// 	const variable = this.parent.getVariable(name);
+		// 	if(variable)
+		// }
 
 		throw new Error(`Unknown variable: ${name}`);
 	}
@@ -64,19 +85,25 @@ class Context {
 	}
 }
 
-const builtInTypes: Record<string, Type> = {
-	int: { name: "int", size: 1 },
-	void: { name: "void", size: 0 }
-};
+type ReferenceChain = { offset: string; offsetExpression: { expression: string; multiplier: string }; pointer: boolean; type: Type }[];
+
+const builtInTypes: Type[] = [
+	{ name: "int", size: 1, kind: TypeKind.BuiltIn },
+	{ name: "void", size: 0, kind: TypeKind.BuiltIn }
+];
 
 const debug_logs = false;
 
 class JSCompiler implements Compiler {
-	// private code: string = "";
-	public types: Record<string, Type> = builtInTypes;
+	public types: Record<string, Type> = {};
 	public context: Context = new Context();
 	private functionInfos: Record<string, { argSize: number; returnType: Type }> = {};
-	private numberOfArgumentRegistersUsed = 0;
+	private currentFunctionReturnType: Type;
+
+	private semiIndex = 0;
+	constructor(private semiTerminatedLines: string[] = []) {
+		builtInTypes.forEach(type => this.registerType(type));
+	}
 
 	private getSetupCode() {
 		let code = "";
@@ -87,10 +114,11 @@ class JSCompiler implements Compiler {
 		code += `const pop = () => stack[--sp];\n`;
 		code += `const ref = (idx) => stack[idx];\n`;
 		code += `const set = (idx, value) => stack[idx] = value;\n`;
-		code += `let regA = 0;\n`;
-		code += `let regB = 0;\n`;
-		code += `let regC = 0;\n`;
-		code += `let regD = 0;\n`;
+		code += `let regA = 0; // Math A\n`;
+		code += `let regB = 0; // Math B\n`;
+		code += `let regC = 0; // Intermittent/General\n`;
+		code += `let regD = 0; // Function call setup\n`;
+		code += `let regE = 0; // Pointer logic\n`;
 		code += `const argReg = [];\n`;
 
 		code += `\n`;
@@ -100,7 +128,7 @@ class JSCompiler implements Compiler {
 
 	private getTearDownCode() {
 		let code = "";
-		code += `console.log({ stack, sp, fp, regA, regB, regC });\n`;
+		// code += `console.log({ stack, sp, fp, regA, regB, regC });\n`;
 
 		return code;
 	}
@@ -109,6 +137,7 @@ class JSCompiler implements Compiler {
 		let code = "";
 
 		code += this.getSetupCode();
+		code += "// " + this.semiTerminatedLines[this.semiIndex++] + "\n";
 		ast.body.forEach(node => (code += this.handleNode(node)));
 		code += this.getTearDownCode();
 
@@ -129,8 +158,8 @@ class JSCompiler implements Compiler {
 					return this.handleBinaryExpression(node);
 				case ASTType.Reference:
 					return this.getVariableReference(node);
-				// case ASTType.Return:
-				// 	return this.handleReturnStatement(node);
+				case ASTType.Return:
+					return this.handleReturnStatement(node);
 				case ASTType.FunctionCall:
 					return this.handleFunctionCall(node);
 				case ASTType.VariableDeclaration:
@@ -139,6 +168,12 @@ class JSCompiler implements Compiler {
 					return this.handleStructDeclaration(node);
 				case ASTType.VariableAssignment:
 					return this.handleVariableAssignment(node);
+				case ASTType.GetAddress:
+					return this.handleGetAddress(node);
+				case ASTType.Dereference:
+					return this.handleDereference(node);
+				case ASTType.Semi:
+					return "// " + this.semiTerminatedLines[this.semiIndex++] + "\n";
 				default:
 					throw new Error(`Unknown node type: ${node.type}`);
 			}
@@ -147,12 +182,16 @@ class JSCompiler implements Compiler {
 		return prefix + exec();
 	}
 
-	private getVariableReference(node: ASTReference): string {
-		const { offset, type } = this.getReferenceOffset(node);
+	// References //
 
+	private getVariableReference(node: ASTReference): string {
+		// const chain = this.getReferenceChain(node);
 		let code = "";
+		const { code: chainCode, type } = this.getAddressOfVariable(node);
+		code += chainCode;
+
 		for (let i = 0; i < type.size; i++) {
-			code += `regC = ref(fp + ${offset} + ${i}); // ${this.debugReference(node)}\n`;
+			code += `regC = ref(regE + ${i}); // ${this.debugReference(node)}\n`;
 			code += `push(regC);\n`;
 		}
 
@@ -160,50 +199,141 @@ class JSCompiler implements Compiler {
 		return code;
 	}
 
-	private handleVariableAssignment(node: ASTVariableAssignment): string {
-		const { offset, type } = this.getReferenceOffset(node.reference);
+	public getAddressOfVariable(node: ASTReference): { code: string; type: Type } {
+		const variable = this.context.getVariable(node.key);
+
+		const children: ASTReference[] = [];
+		const getChildren = (ref: ASTReference) => {
+			if (ref.child) {
+				children.push(ref.child);
+				getChildren(ref.child);
+			}
+		};
+		getChildren(node);
+
+		let type = variable.type;
 
 		let code = "";
-		code += this.handleNode(node.expression);
-		for (let i = 0; i < type.size; i++) {
-			code += `regC = pop();\n`;
-			code += `set(fp + ${offset} + ${type.size - i - 1}, regC); // Assign ${this.debugReference(node.reference)}\n`;
+		if (node.dereference) {
+			// Get what variable is pointing to as base
+			code += `regC = ref(fp + ${variable.offset}); // Read ${variable.name}\n`;
+			code += `regE = ref(regC); // Deref ${variable.name}\n`;
+			type = (type as PointerType).baseType;
+		} else {
+			code += `regE = fp + ${variable.offset}; // Set to address of ${variable.name}\n`;
 		}
+
+		// Calculate relative offsets
+		children.forEach(child => {
+			if (child.key) {
+				if (child.dereference) {
+					const st = (type as PointerType).baseType as StructType;
+					const structKey = st.fields.find(field => field.name == child.key);
+
+					code += `regC = ref(regE); // Read ${structKey.name}\n`;
+					code += `regE = regC + ${structKey.offset}; // Deref ${structKey.name}\n`;
+					type = structKey.type;
+				} else {
+					const st = type as StructType;
+					const structKey = st.fields.find(field => field.name == child.key);
+					code += `regE = regE + ${structKey.offset}; // Move forward to ${structKey.name}\n`;
+					type = structKey.type;
+				}
+			}
+
+			if (child.arrayIndex) {
+				code += `push(regE); // Protect regE for array index\n`;
+				code += this.handleNode(child.arrayIndex);
+				code += `regC = pop();\n`;
+				code += `regE = pop();\n`;
+				code += `regE = regE + (regC * ${type.size}); // Move forward to array index\n`;
+			}
+		});
+
+		return { code: code, type: type };
+	}
+
+	private debugReference(node: ASTReference) {
+		let currentRef = node;
+		let result = "";
+
+		const recurse = () => {
+			if (currentRef.key) {
+				result += (result.length > 0 ? "." : "") + currentRef.key;
+			}
+
+			if (currentRef.arrayIndex) {
+				result += `[<expr>]`;
+			}
+
+			if (currentRef.child) {
+				currentRef = currentRef.child;
+				recurse();
+			}
+		};
+
+		recurse();
+
+		return result;
+	}
+
+	// Variables //
+
+	private handleGetAddress(node: ASTGetAddress): string {
+		let code = "";
+		const { code: chainCode, type } = this.getAddressOfVariable(node.reference);
+		code += chainCode;
+		code += `push(regE); // Get address ${this.debugReference(node.reference)}\n`;
+
 		return code;
 	}
 
-	private handleStructDeclaration(structDecl: ASTStructStatement): string {
-		const type: Type = {
-			name: structDecl.name,
-			fields: [],
-			size: 0
-		};
+	private handleDereference(node: ASTDereference): string {
+		let code = "";
+		code += this.handleNode(node.reference);
+		code += `regC = pop();\n`;
+		code += `push(ref(regC)); // Dereference ${this.debugReference(node.reference)}\n`;
 
-		let idx = 0;
-		structDecl.keys.forEach(field => {
-			const fieldSize = this.resolveType(field.type);
-			type.fields.push({ type: fieldSize, name: field.name, offset: idx });
-			idx += fieldSize.size;
-		});
-
-		type.size = idx;
-
-		this.types[type.name] = type;
-
-		return "\n";
+		return code;
 	}
 
-	private resolveType(ref: ASTReference | string) {
-		let type: Type;
-		if (typeof ref == "string") {
-			type = this.types[ref];
-		} else {
-			type = this.types[ref.key];
+	private handleVariableAssignment(node: ASTVariableAssignment): string {
+		// const { offset, type, isPointer } = this.getReferenceChain(node.reference);
+
+		// const chain = this.getReferenceChain(node.reference);
+		// const type = chain[chain.length - 1].type;
+
+		let code = "";
+		code += this.handleNode(node.expression);
+
+		const { code: chainCode, type } = this.getAddressOfVariable(node.reference);
+		code += chainCode;
+
+		for (let i = 0; i < type.size; i++) {
+			code += `regC = pop();\n`;
+			code += `set(fp + regE + ${type.size - i - 1}, regC); // Assign ${this.debugReference(node.reference)}\n`;
 		}
 
-		if (!type) throw new Error(`Unknown type: ${JSON.stringify(ref)}`);
+		return code;
+	}
 
-		return type;
+	private handleVariableDeclaration(node: ASTVariableDeclaration): string {
+		let code = "";
+		const type = this.resolveType(node.varType);
+		const variable = this.context.addVariable(node.name, type);
+
+		code += `sp += ${variable.type.size}; // Space for ${node.name}\n`;
+		if (node.expression.type == ASTType.InlineArrayAssignment || node.expression.type == ASTType.InlineStructAssignment) {
+			code += this.handleInlineAssignment(variable, node.expression);
+		} else {
+			code += this.handleNode(node.expression);
+			for (let i = 0; i < type.size; i++) {
+				code += `regC = pop();\n`;
+				code += `set(fp + ${variable.offset + (type.size - i - 1)}, regC); // Variable ${node.name} at ${variable.offset}\n`;
+			}
+		}
+
+		return code;
 	}
 
 	private handleInlineAssignment(variable: Variable, inline: ASTInlineArrayAssignment | ASTInlineStructAssignment): string {
@@ -217,8 +347,6 @@ class JSCompiler implements Compiler {
 		} else {
 			inline.keys.forEach((key, idx) => {
 				code += this.handleNode(key.value);
-				// const keyType = (variable.type as StructType).fields.find(f => f.name == key.name);
-				// if (!keyType) throw new Error(`Unknown field: ${key.name}`);
 				const offset = this.resolveStructKeyOffset(key.name, variable.type as StructType);
 				code += `regC = pop();\n`;
 				code += `set(fp + ${variable.offset + offset}, regC);\n`;
@@ -226,6 +354,46 @@ class JSCompiler implements Compiler {
 		}
 
 		return code;
+	}
+
+	// Types //
+
+	private handleStructDeclaration(structDecl: ASTStructStatement): string {
+		const type: Type = {
+			name: structDecl.name,
+			fields: [],
+			size: 0,
+			kind: TypeKind.Struct
+		};
+
+		let idx = 0;
+		structDecl.keys.forEach(field => {
+			const fieldSize = this.resolveType(field);
+			type.fields.push({ type: fieldSize, name: field.name, offset: idx });
+			idx += fieldSize.size;
+		});
+
+		type.size = idx;
+
+		this.registerType(type);
+
+		return "\n";
+	}
+
+	private resolveType(ref: ASTReference | TypedKey) {
+		let type: Type;
+
+		if (ref.type == ASTType.Reference) {
+			const r = ref as ASTReference;
+			type = this.types[r.key + (r.dereference ? "*" : "")];
+		} else {
+			const r = ref as TypedKey;
+			type = this.types[r.type + (r.isPointer ? "*" : "")];
+		}
+
+		if (!type) throw new Error(`Unknown type: ${JSON.stringify(ref)}`);
+
+		return type;
 	}
 
 	private resolveStructKeyOffset(tag: string, structType: StructType) {
@@ -242,25 +410,23 @@ class JSCompiler implements Compiler {
 		return offset;
 	}
 
-	private handleVariableDeclaration(node: ASTVariableDeclaration): string {
-		let code = "";
-		const type = this.resolveType(node.varType);
-		const variable = this.context.addVariable(node.name, type);
-		code += `sp += ${variable.type.size}; // Space for ${node.name}\n`;
-		if (node.expression.type == ASTType.InlineArrayAssignment || node.expression.type == ASTType.InlineStructAssignment) {
-			code += this.handleInlineAssignment(variable, node.expression);
-		} else {
-			code += this.handleNode(node.expression);
-			for (let i = 0; i < type.size; i++) {
-				code += `regC = pop();\n`;
-				code += `set(fp + ${variable.offset + (type.size - i - 1)}, regC); // Variable ${node.name} at ${variable.offset}\n`;
-			}
-			// code += `regC = pop();\n`;
-			// code += `set(fp + ${variable.offset}, regC); // Variable ${node.name} at ${variable.offset}\n`;
-		}
+	private registerType(type: Type) {
+		this.types[type.name] = type;
+		// Create pointer type
+		const pointerType: PointerType = {
+			name: type.name + "*",
+			baseType: type,
+			kind: TypeKind.Pointer,
+			size: 1
+		};
 
-		return code;
+		this.types[pointerType.name] = pointerType;
+
+		// console.log(`Registered type ${type.name}`);
+		// console.log(`Registered type ${pointerType.name}`);
 	}
+
+	// Functions //
 
 	private resolveFunctionName(node: ASTReference) {
 		if (!node.child) {
@@ -292,6 +458,38 @@ class JSCompiler implements Compiler {
 		return "";
 	}
 
+	private handleFunctionDeclaration(node: ASTFunctionDeclaration): string {
+		let code = "";
+		this.context = new Context(this.context);
+
+		code += `function ${node.name} () {\n`;
+
+		let argSize = 0;
+		node.parameters.forEach((param, idx) => {
+			const type = this.resolveType(param);
+			this.context.addVariable(param.name, type);
+			argSize += type.size;
+		});
+		this.context.addVariable("__previousFp", this.types["int"]);
+		argSize++;
+
+		const returnType = this.resolveType(node.returnType);
+		this.functionInfos[node.name] = { argSize, returnType };
+		this.currentFunctionReturnType = returnType;
+
+		node.body.forEach(bodyNode => {
+			code += this.handleNode(bodyNode);
+		});
+
+		code += `sp = fp + ${returnType.size + 1}; // Tear down\n`;
+
+		code += `}\n`;
+
+		this.context = this.context.parent;
+
+		return code;
+	}
+
 	private handleFunctionCall(node: ASTFunctionCall): string {
 		const builtIn = builtInFunctions.find(func => func.name == node.reference.key);
 		if (builtIn) return builtIn.handleCall(node, this);
@@ -318,57 +516,49 @@ class JSCompiler implements Compiler {
 		return code;
 	}
 
-	private handleReturnStatement(node: ASTReturn, returnType: Type): string {
+	private handleReturnStatement(node: ASTReturn): string {
 		let code = "";
 		code += this.handleNode(node.expression);
 
 		// Copy return value to frame pointer
-		for (let i = 0; i < returnType.size; i++) {
-			code += `set(fp + ${i}, ref(sp - ${returnType.size - i})); // Return copy\n`;
+		for (let i = 0; i < this.currentFunctionReturnType.size; i++) {
+			code += `set(fp + ${i}, ref(sp - ${this.currentFunctionReturnType.size - i})); // Return copy\n`;
+		}
+
+		code += `sp = fp + ${this.currentFunctionReturnType.size + 1}; // Tear down\n`;
+		code += `return;\n`;
+
+		return code;
+	}
+
+	private handleIfStatement(node: ASTIfStatement, elifIndex = 0): string {
+		let code = "";
+
+		code += this.handleNode(node.condition);
+		const ifE = elifIndex > 0 ? "else if" : "if";
+		code += `${ifE}(pop()) {\n `;
+
+		node.body.forEach(node => (code += this.handleNode(node)));
+
+		code += `}\n`;
+
+		const nextElIf = node.elseIfs[elifIndex];
+		if (nextElIf) {
+			code += `else {\n`;
+			code += this.handleIfStatement(nextElIf, elifIndex + 1);
+			code += `}\n`;
+		} else {
+			if (node.elseBody) {
+				code += `else {\n`;
+				node.elseBody.forEach(node => (code += this.handleNode(node)));
+				code += `}\n`;
+			}
 		}
 
 		return code;
 	}
 
-	public getReferenceOffset(node: ASTReference) {
-		const variable = this.context.getVariable(node.key);
-
-		let currentRef = node.child;
-		let currentType = variable.type;
-		let offset = 0;
-		const offsetExprs = [];
-
-		const recurse = () => {
-			if (currentRef.key) {
-				const nextType = (currentType as StructType).fields.find(field => field.name == currentRef.key);
-				if (!nextType) throw new Error(`Unknown field: ${currentRef.key}`);
-
-				currentType = nextType.type;
-				offset += nextType.offset;
-			}
-
-			if (currentRef.arrayIndex) {
-				const typeSize = (currentType as StructType).size;
-				const expr = this.handleNode(currentRef.arrayIndex);
-				offsetExprs.push(`(${expr} * ${typeSize})`);
-			}
-
-			if (currentRef.child) {
-				currentRef = currentRef.child;
-				recurse();
-			}
-		};
-
-		if (currentRef) recurse();
-
-		let code = "";
-		code += `(${variable.offset} + ${offset}`;
-		offsetExprs.forEach(expr => (code += ` + ${expr}`));
-		code += `)`;
-
-		return { offset: code, type: currentType };
-	}
-
+	// Math //
 	private handleBinaryExpression(node: ASTBinaryOperation): string {
 		let code = "";
 		code += this.handleNode(node.left);
@@ -381,89 +571,8 @@ class JSCompiler implements Compiler {
 		return code;
 	}
 
-	private handleFunctionDeclaration(node: ASTFunctionDeclaration): string {
-		let code = "";
-		this.context = new Context(this.context);
-
-		code += `function ${node.name} () {\n`;
-
-		let argSize = 0;
-		node.parameters.forEach((param, idx) => {
-			const type = this.resolveType(param.type);
-			this.context.addVariable(param.name, type);
-			argSize += type.size;
-		});
-		this.context.addVariable("__previousFp", builtInTypes.int);
-		argSize++;
-
-		const returnType = this.resolveType(node.returnType);
-		this.functionInfos[node.name] = { argSize, returnType };
-
-		node.body.forEach(bodyNode => {
-			if (bodyNode.type == ASTType.Return) {
-				code += this.handleReturnStatement(bodyNode, returnType);
-			} else {
-				code += this.handleNode(bodyNode);
-			}
-		});
-
-		code += `sp = fp + ${argSize}; // Tear down\n`;
-
-		code += `}\n`;
-
-		this.context = this.context.parent;
-
-		return code;
-	}
-
-	private handleIfStatement(node: ASTIfStatement, isElseIf: boolean = false): string {
-		let code = "";
-		const ifE = isElseIf ? "else if" : "if";
-		code += `${ifE}( `;
-		code += this.handleNode(node.condition);
-		code += `) {\n`;
-
-		node.body.forEach(node => (code += this.handleNode(node)));
-
-		code += `}\n`;
-
-		node.elseIfs.forEach(node => (code += this.handleIfStatement(node, true)));
-
-		if (node.elseBody) {
-			code += `else {\n`;
-			node.elseBody.forEach(node => (code += this.handleNode(node)));
-			code += `}\n`;
-		}
-
-		return code;
-	}
-
 	private handleNumberLiteral(node: ASTNumber): string {
 		return `push(${node.value}); // Num lit ${node.value}\n`;
-	}
-
-	private debugReference(node: ASTReference) {
-		let currentRef = node;
-		let result = "";
-
-		const recurse = () => {
-			if (currentRef.key) {
-				result += (result.length > 0 ? "." : "") + currentRef.key;
-			}
-
-			if (currentRef.arrayIndex) {
-				result += `[<expr>]`;
-			}
-
-			if (currentRef.child) {
-				currentRef = currentRef.child;
-				recurse();
-			}
-		};
-
-		recurse();
-
-		return result;
 	}
 }
 

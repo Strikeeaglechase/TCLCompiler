@@ -1,0 +1,5 @@
+// EXPECT: 5
+
+int a = 5;
+int b = a;
+print(b);
