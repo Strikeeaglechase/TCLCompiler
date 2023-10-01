@@ -2,8 +2,8 @@ import fs from "fs";
 
 import { JSCompiler } from "./jsCompiler/jsCompiler.js";
 import { Parser } from "./parser/parser.js";
+import { PreCompiler } from "./parser/precompiler.js";
 import { Tokenizer } from "./parser/tokenizer.js";
-import { Stream } from "./stream.js";
 import { UnitTester } from "./unitTests.js";
 
 let file: string;
@@ -11,14 +11,17 @@ if (fs.existsSync("./code.txt")) file = fs.readFileSync("./code.txt", "utf-8");
 else file = fs.readFileSync("../code.txt", "utf-8");
 
 // Extract lines from file
-const semiTerminatedLines = file
-	.split("\n")
-	.filter(l => !l.startsWith("//") && l.trim() != "" && l.trim().endsWith(";"))
-	.map(l => l.trim());
+// const semiTerminatedLines = file
+// 	.split("\n")
+// 	.filter(l => !l.startsWith("//") && l.trim() != "" && l.trim().endsWith(";"))
+// 	.map(l => l.trim());
 
-const stream = new Stream(file.trim().split(""));
+const precompiler = new PreCompiler(file);
+const stream = precompiler.preTokenize();
 const tokenizer = new Tokenizer(stream);
-const tokens = tokenizer.parse();
+const tokenizerTokens = tokenizer.parse();
+const tokens = precompiler.postTokenize(tokenizerTokens);
+
 fs.writeFileSync(
 	"../tokens.txt",
 	tokens
@@ -31,7 +34,7 @@ const parser = new Parser(tokens);
 const ast = parser.parse();
 fs.writeFileSync("../ast.json", JSON.stringify(ast, null, 3));
 
-const compiler = new JSCompiler(semiTerminatedLines);
+const compiler = new JSCompiler();
 const js = compiler.compile(ast);
 
 fs.writeFileSync("../out.js", js);

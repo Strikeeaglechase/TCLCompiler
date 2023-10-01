@@ -1,0 +1,18 @@
+// EXPECT: 24
+
+void test() {
+	int a = 10;
+	int b = 17;
+	int c = 24;
+
+	b = c;
+
+	print(b);
+}
+
+int pad0 = 0;
+int pad1 = 0;
+int pad2 = 0;
+int pad3 = 0;
+
+test();

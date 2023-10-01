@@ -2,7 +2,7 @@ import { Stream } from "../stream.js";
 
 const identifierStartChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_";
 
-const keywords = ["break", "const", "continue", "else", "elseif", "enum", "goto", "if", "return", "static", "struct", "while"];
+const keywords = ["break", "const", "continue", "else", "elseif", "enum", "goto", "if", "return", "static", "struct", "while", "for"];
 const operands = ["+", "-", "*", "/", "%", "|", "&", "^", "||", "&&", "!", "==", "!=", "<", ">", "<=", ">="];
 const symbols = ["(", ")", "[", "]", "{", "}", ";", ",", ".", "=", ":", "->"];
 
@@ -56,7 +56,8 @@ class Tokenizer {
 		const pair = char + next;
 
 		if (pair == "//") return this.input.skipUntil("\n");
-		if (char == '"') return this.parseString();
+		if (char == '"') return this.tokens.push(this.parseString('"'));
+		if (char == "'") return this.parseChar();
 		if (operands.includes(pair)) return this.parseOperand(pair);
 		if (symbols.includes(pair)) return this.parseSymbol(pair);
 		if (operands.includes(char)) return this.parseOperand(char);
@@ -113,21 +114,51 @@ class Tokenizer {
 		});
 	}
 
-	private parseString() {
+	private parseChar() {
+		const char = this.parseString("'").value;
+		if (char.length > 1) throw new Error("Invalid char literal: " + char);
+
+		this.tokens.push({
+			type: TokenType.Literal,
+			value: char.charCodeAt(0).toString()
+		});
+		// const char = this.input.next();
+		// this.input.next(); // Read '
+
+		// this.tokens.push({
+		// 	type: TokenType.Literal,
+		// 	value: char.charCodeAt(0).toString()
+		// });
+	}
+
+	private parseString(endChar: string) {
 		const chars = [];
+		const charEscapedConversions: Record<string, string> = {
+			n: "\n",
+			t: "\t",
+			r: "\r"
+		};
+
 		while (!this.input.eof()) {
 			const char = this.input.next();
-			if (char == "\\") chars.push(this.input.next());
-			else {
-				if (char == '"') break;
+			if (char == "\\") {
+				// Maybe convert to newlines, tabs, etc
+				const next = this.input.next();
+				if (next in charEscapedConversions) {
+					chars.push(charEscapedConversions[next]);
+				} else {
+					chars.push(next);
+				}
+			} else {
+				if (char == endChar) break;
 				chars.push(char);
 			}
 		}
 
-		this.tokens.push({
+		return {
 			type: TokenType.Literal,
 			value: chars.join("")
-		});
+		};
 	}
 }
 

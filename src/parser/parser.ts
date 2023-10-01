@@ -3,6 +3,7 @@ import {
 	AST,
 	ASTDereference,
 	ASTEnumStatement,
+	ASTForStatement,
 	ASTFunctionCall,
 	ASTFunctionDeclaration,
 	ASTGetAddress,
@@ -49,19 +50,15 @@ class Parser {
 			case TokenType.Identifier:
 				result = this.handleIdentifier();
 				break;
-
 			case TokenType.Literal:
 				result = this.handleLiteral();
 				break;
-
 			case TokenType.Symbol:
 				result = this.handleSymbol();
 				break;
-
 			case TokenType.Keyword:
 				result = this.handleKeyword();
 				break;
-
 			case TokenType.Operand:
 				result = this.handleOperand();
 				break;
@@ -92,6 +89,8 @@ class Parser {
 				return this.handleIfStatement();
 			case "while":
 				return this.handleWhileStatement();
+			case "for":
+				return this.handleForStatement();
 			case "break":
 				return this.handleBreakStatement();
 			case "continue":
@@ -170,6 +169,28 @@ class Parser {
 		};
 
 		return whileStatement;
+	}
+
+	private handleForStatement() {
+		this.throwIfNotConsume(TokenType.Symbol, "("); // Read (
+		const initialization = this.parseAst();
+		this.maybeConsume(TokenType.Symbol, ";");
+		const condition = this.parseAst();
+		this.maybeConsume(TokenType.Symbol, ";");
+		const iteration = this.parseAst();
+		this.throwIfNotConsume(TokenType.Symbol, ")"); // Read )
+
+		const body = this.parseOptionallyBracketedBody();
+
+		const forStatement: ASTForStatement = {
+			type: ASTType.ForStatement,
+			initialization: initialization as ASTVariableDeclaration,
+			condition: condition,
+			iteration: iteration as ASTVariableAssignment,
+			body: body
+		};
+
+		return forStatement;
 	}
 
 	private handleBreakStatement(): AST {
@@ -350,7 +371,7 @@ class Parser {
 		if (derefRef.type == ASTType.Reference) {
 			const deref: ASTDereference = {
 				type: ASTType.Dereference,
-				reference: derefRef
+				expression: derefRef
 			};
 
 			return deref;
@@ -360,6 +381,13 @@ class Parser {
 			derefRef.reference.dereference = true;
 			return derefRef;
 		}
+
+		const deref: ASTDereference = {
+			type: ASTType.Dereference,
+			expression: derefRef
+		};
+
+		return deref;
 	}
 
 	private handleOperand() {
@@ -412,12 +440,30 @@ class Parser {
 		const token = this.tokens.next();
 		const numerics = "-0123456789";
 		if (numerics.includes(token.value[0])) {
-			const num: ASTNumber = {
-				type: ASTType.Number,
-				value: Number(token.value)
+			const numericBaseStarters = {
+				"0b": 2,
+				"0o": 8,
+				"0d": 10,
+				"0x": 16
 			};
 
-			return num;
+			const starter = token.value.slice(0, 2).toLowerCase();
+			if (numericBaseStarters[starter]) {
+				const base = numericBaseStarters[starter];
+				const restNum = token.value.slice(2);
+				const num = parseInt(restNum, base);
+				const numAst: ASTNumber = {
+					type: ASTType.Number,
+					value: num
+				};
+				return numAst;
+			} else {
+				const num: ASTNumber = {
+					type: ASTType.Number,
+					value: Number(token.value)
+				};
+				return num;
+			}
 		}
 
 		const str: ASTString = {

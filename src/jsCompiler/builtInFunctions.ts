@@ -19,5 +19,27 @@ export const builtInFunctions: BuiltInFunction[] = [
 
 			return code;
 		}
+	},
+	{
+		name: "printc",
+		handleCall(call: ASTFunctionCall, compiler: JSCompiler): string {
+			let code = "";
+			call.arguments.forEach(arg => {
+				code += compiler.handleNode(arg);
+				code += `print(String.fromCharCode(pop()));\n`;
+			});
+
+			return code;
+		}
+	},
+	{
+		name: "malloc",
+		handleCall(call: ASTFunctionCall, compiler: JSCompiler): string {
+			let code = "";
+			code += compiler.handleNode(call.arguments[0]);
+			code += `regC = malloc(pop())\n`;
+			code += `push(regC);\n`;
+			return code;
+		}
 	}
 ];

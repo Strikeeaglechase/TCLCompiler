@@ -1,0 +1,10 @@
+// EXPECT: 17
+
+int x = 5;
+int y = 17;
+
+int addrX = &x;
+
+int indirectY = *(addrX + 1);
+
+print(indirectY);

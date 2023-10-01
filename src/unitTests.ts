@@ -23,8 +23,12 @@ class UnitTester {
 
 	private runTest(testFile: string) {
 		const file = fs.readFileSync(`../unitTests/${testFile}`, "utf-8");
-		const expectedMatch = file.matchAll(/\/\/ EXPECT: (\d+)/g);
+		const expectedMatch = file.matchAll(/\/\/ EXPECT: (.+)/g);
 		const expected = [...expectedMatch].map(m => m[1]);
+		if (expected.length == 0) {
+			console.log(`Test file ${testFile} has no expected output`);
+			return;
+		}
 
 		const stream = new Stream(file.trim().split(""));
 		const tokenizer = new Tokenizer(stream);

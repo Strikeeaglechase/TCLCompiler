@@ -10,6 +10,7 @@ export enum ASTType {
 	BinaryOperation = "BinaryOperation",
 	IfStatement = "IfStatement",
 	WhileStatement = "WhileStatement",
+	ForStatement = "ForStatement",
 	BreakStatement = "BreakStatement",
 	ContinueStatement = "ContinueStatement",
 	EnumStatement = "EnumStatement",
@@ -67,7 +68,7 @@ export interface ASTGetAddress {
 
 export interface ASTDereference {
 	type: ASTType.Dereference;
-	reference: ASTReference;
+	expression: AST;
 }
 
 export interface ASTVariableAssignment {
@@ -114,6 +115,14 @@ export interface ASTIfStatement {
 export interface ASTWhileStatement {
 	type: ASTType.WhileStatement;
 	condition: AST;
+	body: AST[];
+}
+
+export interface ASTForStatement {
+	type: ASTType.ForStatement;
+	initialization: ASTVariableDeclaration | null;
+	condition: AST | null;
+	iteration: ASTVariableAssignment | null;
 	body: AST[];
 }
 
@@ -166,6 +175,7 @@ export type AST =
 	| ASTBinaryOperation
 	| ASTIfStatement
 	| ASTWhileStatement
+	| ASTForStatement
 	| ASTBreakStatement
 	| ASTContinueStatement
 	| ASTEnumStatement

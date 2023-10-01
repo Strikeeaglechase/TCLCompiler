@@ -3,6 +3,7 @@ import {
 	ASTBinaryOperation,
 	ASTDereference,
 	ASTEnumStatement,
+	ASTForStatement,
 	ASTFunctionCall,
 	ASTFunctionDeclaration,
 	ASTGetAddress,
@@ -13,10 +14,12 @@ import {
 	ASTProg,
 	ASTReference,
 	ASTReturn,
+	ASTString,
 	ASTStructStatement,
 	ASTType,
 	ASTVariableAssignment,
 	ASTVariableDeclaration,
+	ASTWhileStatement,
 	TypedKey
 } from "../parser/ast.js";
 import { builtInFunctions } from "./builtInFunctions.js";
@@ -92,6 +95,10 @@ class Context {
 
 		return this.variables[name];
 	}
+
+	public advanceOffset(size: number) {
+		this.currentOffset += size;
+	}
 }
 
 const builtInTypes: Type[] = [
@@ -130,7 +137,9 @@ class JSCompiler implements Compiler {
 		code += `let regC = 0; // Intermittent/General\n`;
 		code += `let regD = 0; // Function call setup\n`;
 		code += `let regE = 0; // Pointer logic\n`;
-		code += `const argReg = [];\n`;
+		code += `let printBuffer = "";\n`;
+		code += `const print = (value) => {printBuffer += value; if (value[value.length - 1] == "\\n") output(); }\n`;
+		code += `const output = () => { if(printBuffer[printBuffer.length-1] == "\\n") printBuffer = printBuffer.substring(0, printBuffer.length - 1); console.log(printBuffer); printBuffer = ""; }\n`;
 
 		code += `\n`;
 
@@ -161,6 +170,10 @@ class JSCompiler implements Compiler {
 			switch (node.type) {
 				case ASTType.IfStatement:
 					return this.handleIfStatement(node);
+				case ASTType.WhileStatement:
+					return this.handleWhileStatement(node);
+				case ASTType.ForStatement:
+					return this.handleForStatement(node);
 				case ASTType.FunctionDeclaration:
 					return this.handleFunctionDeclaration(node);
 				case ASTType.Number:
@@ -315,9 +328,9 @@ class JSCompiler implements Compiler {
 
 	private handleDereference(node: ASTDereference): string {
 		let code = "";
-		code += this.handleNode(node.reference);
+		code += this.handleNode(node.expression);
 		code += `regC = pop();\n`;
-		code += `push(ref(regC)); // Dereference ${this.debugReference(node.reference)}\n`;
+		code += `push(ref(regC)); // Dereference \n`;
 
 		return code;
 	}
@@ -336,7 +349,7 @@ class JSCompiler implements Compiler {
 
 		for (let i = 0; i < type.size; i++) {
 			code += `regC = pop();\n`;
-			code += `set(fp + regE + ${type.size - i - 1}, regC); // Assign ${this.debugReference(node.reference)}\n`;
+			code += `set(regE + ${type.size - i - 1}, regC); // Assign ${this.debugReference(node.reference)}\n`;
 		}
 
 		return code;
@@ -353,7 +366,7 @@ class JSCompiler implements Compiler {
 			code += this.handleNode(node.arraySizeExpression);
 			code += `regC = pop();\n`;
 			code += `regC = regC * ${tp.size};\n`;
-			code += `set(fp + ${variable.offset}, fp + ${variable.offset} + 1); // Array pointer into heap for ${node.name}\n`;
+			code += `set(fp + ${variable.offset}, fp + ${variable.offset} + 1); // Array pointer setup for ${node.name}\n`;
 			code += `sp += regC + 1; // Space for ${node.name}\n`;
 		} else {
 			code += `sp += ${variable.type.size}; // Space for ${node.name}\n`;
@@ -361,6 +374,8 @@ class JSCompiler implements Compiler {
 
 		if (node.expression.type == ASTType.InlineArrayAssignment || node.expression.type == ASTType.InlineStructAssignment) {
 			code += this.handleInlineAssignment(variable, node.expression);
+		} else if (node.expression.type == ASTType.String) {
+			code += this.handleStringAssignment(node.expression, variable);
 		} else {
 			code += this.handleNode(node.expression);
 			for (let i = 0; i < type.size; i++) {
@@ -372,10 +387,25 @@ class JSCompiler implements Compiler {
 		return code;
 	}
 
+	private handleStringAssignment(str: ASTString, variable: Variable): string {
+		let code = "";
+		code += `set(fp + ${variable.offset}, fp + ${variable.offset} + 1); // Array pointer setup for ${variable.name}\n`;
+		code += `regE = fp + ${variable.offset} + 1; // Array pointer for string ${variable.name}\n`;
+		str.value.split("").forEach((char, idx) => {
+			code += `set(regE + ${idx}, ${char.charCodeAt(0)}); // String[${idx}] char: ${char}\n`;
+		});
+
+		code += `set(regE + ${str.value.length}, 0); // Null terminate string\n`;
+		code += `sp += ${str.value.length + 1}; // Space for string\n`;
+		this.context.advanceOffset(str.value.length + 1);
+
+		return code;
+	}
+
 	private handleInlineAssignment(variable: Variable, inline: ASTInlineArrayAssignment | ASTInlineStructAssignment): string {
 		let code = "";
 		if (inline.type == ASTType.InlineArrayAssignment) {
-			code += `regE = ref(fp + ${variable.offset}); // Array pointer into heap for ${variable.name}\n`;
+			code += `regE = ref(fp + ${variable.offset}); // Array pointer for ${variable.name}\n`;
 			inline.values.forEach((value, idx) => {
 				code += `push(regE);\n`;
 				code += this.handleNode(value);
@@ -639,6 +669,8 @@ class JSCompiler implements Compiler {
 		return code;
 	}
 
+	// Control flow //
+
 	private handleIfStatement(node: ASTIfStatement, elifIndex = 0): string {
 		let code = "";
 
@@ -662,6 +694,38 @@ class JSCompiler implements Compiler {
 				code += `}\n`;
 			}
 		}
+
+		return code;
+	}
+
+	private handleWhileStatement(node: ASTWhileStatement): string {
+		let code = "";
+
+		code += `while (true) {\n`;
+
+		code += this.handleNode(node.condition);
+		code += `if (!pop()) break;\n`;
+
+		node.body.forEach(node => (code += this.handleNode(node)));
+
+		code += `}\n`;
+
+		return code;
+	}
+
+	private handleForStatement(node: ASTForStatement): string {
+		let code = "";
+
+		if (node.initialization) code += this.handleNode(node.initialization);
+		code += `while(true) {\n`;
+		if (node.condition) {
+			code += this.handleNode(node.condition);
+			code += `if(!pop()) break;\n`;
+		}
+		node.body.forEach(node => (code += this.handleNode(node)));
+		if (node.iteration) code += this.handleNode(node.iteration);
+
+		code += `}\n`;
 
 		return code;
 	}

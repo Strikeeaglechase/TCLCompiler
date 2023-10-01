@@ -1,0 +1,17 @@
+// EXPECT: 17
+// EXPECT: 42
+
+int* makeArray(int size) {
+	int* arr = malloc(size);
+
+	return arr;
+}
+
+int* arr = makeArray(10);
+int* otherArr = makeArray(1);
+
+arr[3] = 17;
+otherArr[0] = 42;
+
+print(arr[3]);
+print(otherArr[0]);

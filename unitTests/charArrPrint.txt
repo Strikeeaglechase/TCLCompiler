@@ -1,0 +1,16 @@
+// EXPECT: Hello, world!
+
+void printStr(int* str) {
+	int idx = 0;
+	while (str[idx] != 0) {
+		printc(str[idx]);
+		idx = idx + 1;
+	}
+
+	printc('\n');
+}
+
+
+int* string = "Hello, world!";
+
+printStr(string);

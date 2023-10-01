@@ -1,0 +1,15 @@
+// EXPECT: 10
+// EXPECT: 10
+// EXPECT: 10
+// EXPECT: 10
+// EXPECT: 10
+// EXPECT: 65
+
+int tenDec = 0d10;
+int tenDecDirect = 10;
+int tenHex = 0xa;
+int tenOctal = 0o12;
+int tenBin = 0b1010;
+int a = 'A';
+
+print(tenDec, tenDecDirect, tenHex, tenOctal, tenBin, a);
