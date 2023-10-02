@@ -8,6 +8,7 @@ import { Stream } from "./stream.js";
 
 class UnitTester {
 	private testFiles: string[] = [];
+	private totalPassed: number = 0;
 	constructor() {
 		if (!fs.existsSync("../unitTests")) fs.mkdirSync("../unitTests");
 		if (!fs.existsSync("../unitTests/outs")) fs.mkdirSync("../unitTests/outs");
@@ -18,7 +19,11 @@ class UnitTester {
 	}
 
 	public runTests() {
+		const start = Date.now();
 		this.testFiles.forEach(f => this.runTest(f));
+		const end = Date.now();
+
+		console.log(`${this.totalPassed} tests passed in ${end - start}ms`);
 	}
 
 	private runTest(testFile: string) {
@@ -45,6 +50,8 @@ class UnitTester {
 			if (e != result[i]) {
 				console.log(`Test ${testFile} failed on case ${i}, expected ${e} but got ${result[i]}`);
 				allPass = false;
+			} else {
+				this.totalPassed++;
 			}
 		});
 

@@ -1,0 +1,13 @@
+// EXPECT: 25
+// EXPECT: 16
+// EXPECT: 15
+
+int i = 15;
+i += 10;
+
+print(i);
+
+int j = 15;
+int k = j++;
+
+print(j, k);

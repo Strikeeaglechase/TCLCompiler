@@ -1,0 +1,17 @@
+// EXPECT: 3
+// EXPECT: 1
+
+struct SubStruct {
+	int z;
+}
+
+struct Point {
+	int x;
+	int y;
+
+	SubStruct sub;
+}
+
+Point pt;
+print(sizeof(Point));
+print(sizeof(pt.sub));

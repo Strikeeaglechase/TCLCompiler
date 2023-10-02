@@ -1,0 +1,46 @@
+// EXPECT: 7
+// EXPECT: 9
+int a = 1 + 2 * 3;
+int b = (1 + 2) * 3;
+print(a, b);
+
+// EXPECT: 2
+// EXPECT: 40
+int c = 4 / 2;
+int d = 8 * 5;
+print(c, d);
+
+// EXPECT: false
+// EXPECT: true
+int e = 1 == 2;
+int d = 1 != 2;
+print(e, d);
+
+// EXPECT: true
+// EXPECT: -6
+// EXPECT: 6
+int f = !(1 == 2);
+int g = ~5;
+int h = -g;
+print(f, g, h);
+
+// EXPECT: 5
+// EXPECT: 2
+// EXPECT: 4
+int i = 1 | 4;
+int j = 2 & 6;
+int k = 3 ^ 7;
+print(i, j, k);
+
+
+// EXPECT: 12
+// EXPECT: 800
+int l = 100 >> 3;
+int m = 100 << 3;
+print(l, m);
+
+// EXPECT: 2
+// EXPECT: 1
+int n = 1;
+int o = n++;
+print(n, o);

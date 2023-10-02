@@ -1,6 +1,7 @@
 import { Stream } from "../stream.js";
 import {
 	AST,
+	ASTBinaryOperation,
 	ASTDereference,
 	ASTEnumStatement,
 	ASTForStatement,
@@ -11,6 +12,7 @@ import {
 	ASTInlineArrayAssignment,
 	ASTInlineStructAssignment,
 	ASTNumber,
+	ASTPrePostOp,
 	ASTProg,
 	ASTReference,
 	ASTReturn,
@@ -18,6 +20,7 @@ import {
 	ASTString,
 	ASTStructStatement,
 	ASTType,
+	ASTUnaryOperation,
 	ASTVariableAssignment,
 	ASTVariableDeclaration,
 	ASTWhileStatement,
@@ -405,6 +408,18 @@ class Parser {
 
 				return getAddress;
 			}
+			case "-":
+			case "~":
+			case "!": {
+				const expression = this.parseAst();
+				const unary: ASTUnaryOperation = {
+					type: ASTType.UnaryOperation,
+					operator: operand.value,
+					expression: expression
+				};
+
+				return unary;
+			}
 			default:
 				throw new Error(`Unexpected operand "${operand.value}"`);
 		}
@@ -564,6 +579,58 @@ class Parser {
 			return this.handleFunctionCall(reference);
 		}
 
+		if (next.type == TokenType.Operand && (next.value == "+" || next.value == "-")) {
+			const nextOver = this.tokens.peekOver();
+			if (nextOver.type == TokenType.Operand && (nextOver.value == "+" || nextOver.value == "-")) {
+				this.tokens.next(); // Read + or -
+				const op = this.tokens.next(); // Read + or -
+
+				const unary: ASTPrePostOp = {
+					type: ASTType.PrePostOp,
+					do: {
+						type: ASTType.VariableAssignment,
+						reference: reference,
+						expression: {
+							type: ASTType.BinaryOperation,
+							operator: op.value,
+							left: reference,
+							right: {
+								type: ASTType.Number,
+								value: 1
+							}
+						}
+					},
+					ret: reference,
+					returnBefore: true
+				};
+
+				return unary;
+			}
+		}
+
+		if (next.type == TokenType.Operand) {
+			const nextOver = this.tokens.peekOver();
+			if (nextOver.type == TokenType.Symbol && nextOver.value == "=") {
+				const op = this.tokens.next(); // Read operator
+				this.tokens.next(); // Read =
+
+				const binary: ASTBinaryOperation = {
+					type: ASTType.BinaryOperation,
+					operator: op.value,
+					left: reference,
+					right: this.parseAst()
+				};
+
+				const assignment: ASTVariableAssignment = {
+					type: ASTType.VariableAssignment,
+					reference: reference,
+					expression: binary
+				};
+
+				return assignment;
+			}
+		}
+
 		// Otherwise, just a reference
 		return reference;
 	}
@@ -607,13 +674,13 @@ class Parser {
 		}
 
 		// Variable declaration
-		if (next.value == "=") return this.handleVariableDeclaration(name, ref);
+		if (next.value == "=" || next.value == ";") return this.handleVariableDeclaration(name, ref);
 		// Function declaration
 		if (next.value == "(") return this.handleFunctionDeclaration(name, ref);
 	}
 
 	private handleVariableDeclaration(name: string, varTypeRef: ASTReference) {
-		this.tokens.next(); // Read =
+		const hasExpression = this.maybeConsume(TokenType.Symbol, "=");
 		let arraySizeExpression: AST = null;
 
 		// Type identifier is an array which really means this is an array type
@@ -624,7 +691,7 @@ class Parser {
 			varTypeRef.dereference = true;
 		}
 
-		const expression = this.parseAst();
+		const expression = hasExpression ? this.parseAst() : null;
 		const decl: ASTVariableDeclaration = {
 			type: ASTType.VariableDeclaration,
 			name: name,

@@ -1,0 +1,21 @@
+// EXPECT: 20
+// EXPECT: 50
+
+void memcopy(int* src, int* dest, int size) {
+	for (int i = 0; i < size; i++) {
+		dest[i] = src[i];
+	}
+}
+
+int size = 10;
+int* heapArr = malloc(size);
+
+for (int i = 0; i < size; i++) {
+	heapArr[i] = i * 10;
+}
+
+int* heapArr2 = malloc(size);
+memcopy(heapArr, heapArr2, size);
+
+print(heapArr[2]);
+print(heapArr2[5]);

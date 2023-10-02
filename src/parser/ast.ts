@@ -20,6 +20,8 @@ export enum ASTType {
 	Reference = "Reference",
 	GetAddress = "GetAddress",
 	Dereference = "Dereference",
+	PrePostOp = "PrePostOp",
+	UnaryOperation = "UnaryOperation",
 	Semi = "Semi"
 }
 
@@ -159,6 +161,19 @@ export interface ASTInlineArrayAssignment {
 	values: AST[];
 }
 
+export interface ASTPrePostOp {
+	type: ASTType.PrePostOp;
+	do: AST;
+	ret: AST;
+	returnBefore: boolean;
+}
+
+export interface ASTUnaryOperation {
+	type: ASTType.UnaryOperation;
+	operator: string;
+	expression: AST;
+}
+
 export interface ASTSemi {
 	type: ASTType.Semi;
 }
@@ -185,4 +200,6 @@ export type AST =
 	| ASTReference
 	| ASTGetAddress
 	| ASTDereference
+	| ASTPrePostOp
+	| ASTUnaryOperation
 	| ASTSemi;

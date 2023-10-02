@@ -11,12 +11,14 @@ import {
 	ASTInlineArrayAssignment,
 	ASTInlineStructAssignment,
 	ASTNumber,
+	ASTPrePostOp,
 	ASTProg,
 	ASTReference,
 	ASTReturn,
 	ASTString,
 	ASTStructStatement,
 	ASTType,
+	ASTUnaryOperation,
 	ASTVariableAssignment,
 	ASTVariableDeclaration,
 	ASTWhileStatement,
@@ -81,12 +83,11 @@ class Context {
 
 	public getVariable(name: string): Variable {
 		if (this.variables[name]) return this.variables[name];
-		// if (this.parent) {
-		// 	const variable = this.parent.getVariable(name);
-		// 	if(variable)
-		// }
-
 		throw new Error(`Unknown variable: ${name}`);
+	}
+
+	public doesVarExist(name: string): boolean {
+		return this.variables[name] != undefined;
 	}
 
 	public addVariable(name: string, type: Type) {
@@ -112,7 +113,7 @@ class JSCompiler implements Compiler {
 	public types: Record<string, Type> = {};
 	public context: Context = new Context();
 	private functionInfos: Record<string, { argSize: number; returnType: Type }> = {};
-	private currentFunctionReturnType: Type;
+	private currentFunctionInfo: { argSize: number; returnType: Type };
 
 	private semiIndex = 0;
 	constructor(private semiTerminatedLines: string[] = []) {
@@ -180,6 +181,10 @@ class JSCompiler implements Compiler {
 					return this.handleNumberLiteral(node);
 				case ASTType.BinaryOperation:
 					return this.handleBinaryExpression(node);
+				case ASTType.PrePostOp:
+					return this.handlePrePostOpExpression(node);
+				case ASTType.UnaryOperation:
+					return this.handleUnaryExpression(node);
 				case ASTType.Reference:
 					return this.getVariableReference(node);
 				case ASTType.Return:
@@ -270,8 +275,7 @@ class JSCompiler implements Compiler {
 				code += `push(regE); // Protect regE for array index\n`;
 				code += this.handleNode(child.arrayIndex);
 				code += `regC = pop();\n`;
-				code += `regE = pop();\n`;
-				code += `regE = ref(regE)\n`;
+				code += `regE = ref(pop());\n`;
 				code += `regE = regE + (regC * ${type.size}); // Move forward to array index\n`;
 			}
 		});
@@ -372,15 +376,22 @@ class JSCompiler implements Compiler {
 			code += `sp += ${variable.type.size}; // Space for ${node.name}\n`;
 		}
 
-		if (node.expression.type == ASTType.InlineArrayAssignment || node.expression.type == ASTType.InlineStructAssignment) {
+		if (node.expression?.type == ASTType.InlineArrayAssignment || node.expression?.type == ASTType.InlineStructAssignment) {
 			code += this.handleInlineAssignment(variable, node.expression);
-		} else if (node.expression.type == ASTType.String) {
+		} else if (node.expression?.type == ASTType.String) {
 			code += this.handleStringAssignment(node.expression, variable);
 		} else {
-			code += this.handleNode(node.expression);
-			for (let i = 0; i < type.size; i++) {
-				code += `regC = pop();\n`;
-				code += `set(fp + ${variable.offset + (type.size - i - 1)}, regC); // Variable ${node.name} at ${variable.offset}\n`;
+			if (node.expression) {
+				code += this.handleNode(node.expression);
+				for (let i = 0; i < type.size; i++) {
+					code += `regC = pop();\n`;
+					code += `set(fp + ${variable.offset + (type.size - i - 1)}, regC); // Init variable ${node.name} at ${variable.offset}\n`;
+				}
+			} else {
+				for (let i = 0; i < type.size; i++) {
+					code += `regC = pop();\n`;
+					code += `set(fp + ${variable.offset + (type.size - i - 1)}, regC); // Zero init variable ${node.name} at ${variable.offset}\n`;
+				}
 			}
 		}
 
@@ -411,7 +422,7 @@ class JSCompiler implements Compiler {
 				code += this.handleNode(value);
 				code += `regC = pop();\n`;
 				code += `regE = pop();\n`;
-				code += `set(regE + ${variable.offset + idx * variable.type.size}, regC);\n`;
+				code += `set(regE + ${idx * variable.type.size}, regC);\n`;
 			});
 		} else {
 			inline.keys.forEach((key, idx) => {
@@ -485,7 +496,7 @@ class JSCompiler implements Compiler {
 		return "\n";
 	}
 
-	private resolveType(ref: ASTReference | TypedKey) {
+	public resolveType(ref: ASTReference | TypedKey) {
 		let type: Type;
 
 		if (ref.type == ASTType.Reference) {
@@ -579,8 +590,7 @@ class JSCompiler implements Compiler {
 				code += `push(regE); // Protect regE for array index\n`;
 				code += this.handleNode(child.arrayIndex);
 				code += `regC = pop();\n`;
-				code += `regE = pop();\n`;
-				code += `regE = ref(regE)\n`;
+				code += `regE = ref(pop());\n`;
 				code += `regE = regE + (regC * ${type.size}); // Move forward to array index\n`;
 			}
 		});
@@ -613,13 +623,12 @@ class JSCompiler implements Compiler {
 
 		const returnType = this.resolveType(node.returnType);
 		this.functionInfos[node.name] = { argSize, returnType };
-		this.currentFunctionReturnType = returnType;
+		this.currentFunctionInfo = { argSize, returnType };
 
 		node.body.forEach(bodyNode => {
 			code += this.handleNode(bodyNode);
 		});
-
-		code += `sp = fp + ${returnType.size + 1}; // Tear down\n`;
+		code += `sp = fp + ${returnType.size + argSize}; // Tear down\n`;
 
 		code += `}\n`;
 
@@ -658,12 +667,15 @@ class JSCompiler implements Compiler {
 		let code = "";
 		code += this.handleNode(node.expression);
 
+		const retSize = this.currentFunctionInfo.returnType.size;
+		const argSize = this.currentFunctionInfo.argSize;
+
 		// Copy return value to frame pointer
-		for (let i = 0; i < this.currentFunctionReturnType.size; i++) {
-			code += `set(fp + ${i}, ref(sp - ${this.currentFunctionReturnType.size - i})); // Return copy\n`;
+		for (let i = 0; i < retSize; i++) {
+			code += `set(fp + ${i}, ref(sp - ${retSize - i})); // Return copy\n`;
 		}
 
-		code += `sp = fp + ${this.currentFunctionReturnType.size + 1}; // Tear down\n`;
+		code += `sp = fp + ${retSize + argSize}; // Tear down\n`;
 		code += `return;\n`;
 
 		return code;
@@ -738,6 +750,26 @@ class JSCompiler implements Compiler {
 		code += `regB = pop();\n`;
 		code += `regA = pop();\n`;
 		code += `regC = regA ${node.operator} regB;\n`;
+		code += `push(regC);\n`;
+
+		return code;
+	}
+
+	private handlePrePostOpExpression(node: ASTPrePostOp): string {
+		let code = "";
+
+		if (node.ret && node.returnBefore) code += this.handleNode(node.ret);
+		code += this.handleNode(node.do);
+		if (node.ret && !node.returnBefore) code += this.handleNode(node.ret);
+
+		return code;
+	}
+
+	private handleUnaryExpression(node: ASTUnaryOperation): string {
+		let code = "";
+		code += this.handleNode(node.expression);
+		code += `regA = pop();\n`;
+		code += `regC = ${node.operator}regA;\n`;
 		code += `push(regC);\n`;
 
 		return code;

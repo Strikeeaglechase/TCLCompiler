@@ -3,24 +3,31 @@ import { Stream } from "../stream.js";
 const identifierStartChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_";
 
 const keywords = ["break", "const", "continue", "else", "elseif", "enum", "goto", "if", "return", "static", "struct", "while", "for"];
-const operands = ["+", "-", "*", "/", "%", "|", "&", "^", "||", "&&", "!", "==", "!=", "<", ">", "<=", ">="];
+const operands = ["+", "-", "*", "/", "%", "|", "&", "^", "||", "&&", "!", "==", "!=", "<", ">", "<=", ">=", "~", ">>", "<<"];
 const symbols = ["(", ")", "[", "]", "{", "}", ";", ",", ".", "=", ":", "->"];
 
 const operatorStartChars = [...new Set(operands.map(o => o[0]))];
 const operandPrecedence: Record<string, number> = {
-	"||": 2,
-	"&&": 3,
-	"<": 7,
-	">": 7,
-	"<=": 7,
-	">=": 7,
+	"!": 1,
+	"~": 1,
+	"*": 3,
+	"/": 3,
+	"%": 3,
+	"+": 4,
+	"-": 4,
+	"<<": 5,
+	">>": 5,
+	"<": 6,
+	"<=": 6,
+	">": 6,
+	">=": 6,
 	"==": 7,
 	"!=": 7,
-	"+": 10,
-	"-": 10,
-	"*": 20,
-	"/": 20,
-	"%": 20
+	"&": 8,
+	"^": 9,
+	"|": 10,
+	"&&": 11,
+	"||": 12
 };
 
 enum TokenType {
