@@ -10,12 +10,6 @@ let file: string;
 if (fs.existsSync("./code.txt")) file = fs.readFileSync("./code.txt", "utf-8");
 else file = fs.readFileSync("../code.txt", "utf-8");
 
-// Extract lines from file
-// const semiTerminatedLines = file
-// 	.split("\n")
-// 	.filter(l => !l.startsWith("//") && l.trim() != "" && l.trim().endsWith(";"))
-// 	.map(l => l.trim());
-
 const precompiler = new PreCompiler(file);
 const stream = precompiler.preTokenize();
 const tokenizer = new Tokenizer(stream);

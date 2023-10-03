@@ -74,6 +74,7 @@ interface Variable {
 
 class Context {
 	public variables: Record<string, Variable> = {};
+	// private stringHeap
 	private currentOffset = 0;
 	constructor(public parent: Context | null = null) {
 		if (parent) {
@@ -115,6 +116,10 @@ class JSCompiler implements Compiler {
 	private functionInfos: Record<string, { argSize: number; returnType: Type }> = {};
 	private currentFunctionInfo: { argSize: number; returnType: Type };
 
+	private stringHeap: Record<string, number> = {};
+	private stackSize = 1024;
+	private heapInit = this.stackSize + 1;
+
 	private semiIndex = 0;
 	constructor(private semiTerminatedLines: string[] = []) {
 		builtInTypes.forEach(type => this.registerType(type));
@@ -123,7 +128,7 @@ class JSCompiler implements Compiler {
 	private getSetupCode() {
 		let code = "";
 		code += `// Setup\n`;
-		code += `const stack_size = 1024;\n`;
+		code += `const stack_size = ${this.stackSize};\n`;
 		code += `let fp = 0; // Frame pointer\n`;
 		code += `let sp = fp; // Stack pointer\n`;
 		code += `const stack = [];\n`;
@@ -131,7 +136,7 @@ class JSCompiler implements Compiler {
 		code += `const pop = () => stack[--sp];\n`;
 		code += `const ref = (idx) => stack[idx];\n`;
 		code += `const set = (idx, value) => stack[idx] = value;\n`;
-		code += `let hp = stack_size; // Heap pointer\n`;
+		code += `let hp = stack_size + ${this.heapInit}; // Heap pointer\n`;
 		code += `const malloc = (size) => { const result = hp; hp += size; return result; };\n`;
 		code += `let regA = 0; // Math A\n`;
 		code += `let regB = 0; // Math B\n`;
@@ -142,6 +147,14 @@ class JSCompiler implements Compiler {
 		code += `const print = (value) => {printBuffer += value; if (value[value.length - 1] == "\\n") output(); }\n`;
 		code += `const output = () => { if(printBuffer[printBuffer.length-1] == "\\n") printBuffer = printBuffer.substring(0, printBuffer.length - 1); console.log(printBuffer); printBuffer = ""; }\n`;
 
+		code += `\n`;
+		code += `// String init:\n`;
+		Object.keys(this.stringHeap).forEach(key => {
+			key.split("").forEach((char, idx) => {
+				code += `set(${this.stringHeap[key] + idx}, ${char.charCodeAt(0)}); // String[${idx}] char: ${char}\n`;
+			});
+			code += `set(${this.stringHeap[key] + key.length}, 0); // Null terminate string\n`;
+		});
 		code += `\n`;
 
 		return code;
@@ -157,12 +170,10 @@ class JSCompiler implements Compiler {
 	public compile(ast: ASTProg): string {
 		let code = "";
 
-		code += this.getSetupCode();
-		code += "// " + this.semiTerminatedLines[this.semiIndex++] + "\n";
 		ast.body.forEach(node => (code += this.handleNode(node)));
-		code += this.getTearDownCode();
 
-		return code;
+		const result = this.getSetupCode() + code + this.getTearDownCode();
+		return result;
 	}
 
 	public handleNode(node: AST): string {
@@ -179,6 +190,8 @@ class JSCompiler implements Compiler {
 					return this.handleFunctionDeclaration(node);
 				case ASTType.Number:
 					return this.handleNumberLiteral(node);
+				case ASTType.String:
+					return this.handleStringLiteral(node);
 				case ASTType.BinaryOperation:
 					return this.handleBinaryExpression(node);
 				case ASTType.PrePostOp:
@@ -204,7 +217,7 @@ class JSCompiler implements Compiler {
 				case ASTType.Dereference:
 					return this.handleDereference(node);
 				case ASTType.Semi:
-					return "// " + this.semiTerminatedLines[this.semiIndex++] + "\n";
+					return "";
 				default:
 					throw new Error(`Unknown node type: ${node.type}`);
 			}
@@ -214,7 +227,6 @@ class JSCompiler implements Compiler {
 	}
 
 	// References //
-
 	private getVariableReference(node: ASTReference): string {
 		// Maybe an enum?
 		const enumType = this.types[node.key];
@@ -320,7 +332,6 @@ class JSCompiler implements Compiler {
 	}
 
 	// Variables //
-
 	private handleGetAddress(node: ASTGetAddress): string {
 		let code = "";
 		const { code: chainCode, type } = this.getAddressOfVariable(node.reference);
@@ -400,15 +411,8 @@ class JSCompiler implements Compiler {
 
 	private handleStringAssignment(str: ASTString, variable: Variable): string {
 		let code = "";
-		code += `set(fp + ${variable.offset}, fp + ${variable.offset} + 1); // Array pointer setup for ${variable.name}\n`;
-		code += `regE = fp + ${variable.offset} + 1; // Array pointer for string ${variable.name}\n`;
-		str.value.split("").forEach((char, idx) => {
-			code += `set(regE + ${idx}, ${char.charCodeAt(0)}); // String[${idx}] char: ${char}\n`;
-		});
-
-		code += `set(regE + ${str.value.length}, 0); // Null terminate string\n`;
-		code += `sp += ${str.value.length + 1}; // Space for string\n`;
-		this.context.advanceOffset(str.value.length + 1);
+		const strAddr = this.getStringLiteralAddress(str);
+		code += `set(fp + ${variable.offset}, ${strAddr}); // Array pointer setup for ${variable.name}\n`;
 
 		return code;
 	}
@@ -437,7 +441,6 @@ class JSCompiler implements Compiler {
 	}
 
 	// Types //
-
 	private handleStructDeclaration(structDecl: ASTStructStatement): string {
 		const type: Type = {
 			name: structDecl.name,
@@ -466,11 +469,13 @@ class JSCompiler implements Compiler {
 			// Rewrite name
 			method.name = "__" + structDecl.name + "_" + method.name;
 			// Push thisarg as first argument
-			method.parameters.unshift({
+			const thisParam: TypedKey = {
 				name: "this",
 				isPointer: true,
 				type: structDecl.name
-			});
+			};
+
+			method.parameters.unshift(thisParam);
 
 			// Register function
 			code += this.handleFunctionDeclaration(method);
@@ -550,7 +555,6 @@ class JSCompiler implements Compiler {
 	}
 
 	// Functions //
-
 	private resolveFunctionName(node: ASTReference) {
 		if (!node.child) {
 			return { name: node.key, thisargSetup: null };
@@ -600,7 +604,7 @@ class JSCompiler implements Compiler {
 			code += `regE = ref(regE); // Funct final deref\n`;
 		}
 
-		code += `push(regE); // Push thisarg pointer`;
+		code += `push(regE); // Push thisarg pointer\n`;
 		const name = `__${type.name}_${children.at(-1).key}`;
 
 		return { name: name, thisargSetup: code };
@@ -613,13 +617,19 @@ class JSCompiler implements Compiler {
 		code += `function ${node.name} () {\n`;
 
 		let argSize = 0;
+		const fpParam: TypedKey = {
+			name: "__previousFp",
+			type: "int",
+			isPointer: false
+		};
+		node.parameters.unshift(fpParam);
+
 		node.parameters.forEach((param, idx) => {
 			const type = this.resolveType(param);
 			this.context.addVariable(param.name, type);
 			argSize += type.size;
 		});
-		this.context.addVariable("__previousFp", this.types["int"]);
-		argSize++;
+		// console.log(node.parameters);
 
 		const returnType = this.resolveType(node.returnType);
 		this.functionInfos[node.name] = { argSize, returnType };
@@ -648,17 +658,18 @@ class JSCompiler implements Compiler {
 		code += `regD = sp; // Setup call ${functionName}\n`; // This will be fp for the method
 		if (debug_logs) code += `console.log("Setting up ${functionName}, stack pointer pre args is " + sp);\n`;
 
+		code += `push(fp);\n`; // First argument is the frame pointer
+		if (debug_logs) code += `console.log("Pushed fp " + fp);\n`;
+
 		if (thisargSetup) code += thisargSetup;
 		node.arguments.forEach((arg, idx) => {
 			code += this.handleNode(arg) + `// ^ Argument ${idx}\n`;
 		});
 
-		code += `push(fp);\n`; // Final argument is the frame pointer
-		if (debug_logs) code += `console.log("Pushed fp " + fp);\n`;
 		code += `fp = regD; // Setup call ${functionName}\n`; // Give the function the fp with args
 		code += `${functionName}(); // Call\n`;
 		// code += `fp = ref(fp + ${functionInfo.argSize - 1}); // Restore fp\n`; // Restore fp
-		code += `fp = pop(); // Restore fp\n`; // Restore fp
+		code += `fp = ref(fp); // Restore fp\n`; // Restore fp
 		if (debug_logs) code += `console.log("Returned from ${functionName} and restored fp: " + fp);\n`;
 		return code;
 	}
@@ -672,7 +683,7 @@ class JSCompiler implements Compiler {
 
 		// Copy return value to frame pointer
 		for (let i = 0; i < retSize; i++) {
-			code += `set(fp + ${i}, ref(sp - ${retSize - i})); // Return copy\n`;
+			code += `set(fp + ${i} + 1, ref(sp - ${retSize - i})); // Return copy\n`;
 		}
 
 		code += `sp = fp + ${retSize + argSize}; // Tear down\n`;
@@ -682,7 +693,6 @@ class JSCompiler implements Compiler {
 	}
 
 	// Control flow //
-
 	private handleIfStatement(node: ASTIfStatement, elifIndex = 0): string {
 		let code = "";
 
@@ -777,6 +787,24 @@ class JSCompiler implements Compiler {
 
 	private handleNumberLiteral(node: ASTNumber): string {
 		return `push(${node.value}); // Num lit ${node.value}\n`;
+	}
+
+	private getStringLiteralAddress(node: ASTString): number {
+		const stringKey = this.stringHeap[node.value];
+		if (stringKey) {
+			return stringKey;
+		}
+
+		const key = this.heapInit;
+		this.heapInit += node.value.length + 1;
+		this.stringHeap[node.value] = key;
+
+		return key;
+	}
+
+	private handleStringLiteral(node: ASTString): string {
+		const key = this.getStringLiteralAddress(node);
+		return `push(${key}); // String literal ${node.value} at ${key}\n`;
 	}
 }
 
