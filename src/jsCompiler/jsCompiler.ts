@@ -120,7 +120,6 @@ class JSCompiler implements Compiler {
 	private stackSize = 1024;
 	private heapInit = this.stackSize + 1;
 
-	private semiIndex = 0;
 	constructor(private semiTerminatedLines: string[] = []) {
 		builtInTypes.forEach(type => this.registerType(type));
 	}

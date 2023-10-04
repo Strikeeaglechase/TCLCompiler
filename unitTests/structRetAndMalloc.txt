@@ -1,0 +1,27 @@
+// EXPECT: 42
+// EXPECT: 72
+
+struct Point {
+	int x;
+	int y;
+}
+
+Point makePoint(int x, int y) {
+	Point p = {x: x, y: y};
+
+	return p;
+}
+
+Point* makePointMalloc(int x, int y) {
+	Point* p = malloc(sizeof(Point));
+	p->x = x;
+	p->y = y;
+
+	return p;
+}
+
+Point pt = makePoint(17, 42);
+print(pt.y);
+
+Point* pt2 = makePointMalloc(35, 72);
+print(pt2->y);

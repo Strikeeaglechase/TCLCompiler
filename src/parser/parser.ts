@@ -26,11 +26,15 @@ import {
 	ASTWhileStatement,
 	TypedKey
 } from "./ast.js";
+import { FileEntry } from "./linker.js";
 import { operandPrecedence, Token, TokenType } from "./tokenizer.js";
 
 class Parser {
 	private types: string[] = ["void", "int"];
-	constructor(private tokens: Stream<Token>) {}
+	private nameRewrites: Record<string, string> = {};
+	private isTopLevelStatement = false;
+
+	constructor(private tokens: Stream<Token>, private file: FileEntry) {}
 
 	public parse() {
 		const prog: ASTProg = {
@@ -39,13 +43,14 @@ class Parser {
 		};
 
 		while (!this.tokens.eof()) {
-			prog.body.push(this.parseAst());
+			prog.body.push(this.parseAst(true));
 		}
 
 		return prog;
 	}
 
-	private parseAst(): AST {
+	private parseAst(tls: boolean = false): AST {
+		this.isTopLevelStatement = tls;
 		const token = this.tokens.peek();
 
 		let result: AST;
@@ -238,7 +243,7 @@ class Parser {
 
 		const enumStatement: ASTEnumStatement = {
 			type: ASTType.EnumStatement,
-			name: name,
+			name: this.maybeRewriteName(name),
 			values: values
 		};
 
@@ -246,7 +251,7 @@ class Parser {
 	}
 
 	private handleStructStatement() {
-		const name = this.tokens.next().value;
+		const name = this.maybeRewriteName(this.tokens.next().value);
 		const keys: TypedKey[] = [];
 		const methods: ASTFunctionDeclaration[] = [];
 
@@ -267,7 +272,7 @@ class Parser {
 			const next = this.tokens.peek();
 			if (next.type == TokenType.Symbol && next.value == "(") {
 				const retType = this.parseKnownSingleTokenReference(type, isPointerType);
-				methods.push(this.handleFunctionDeclaration(name, retType));
+				methods.push(this.handleFunctionDeclaration(name, retType, true));
 			} else {
 				keys.push({ name: name, type: type, arrExpr: arraySizeExpression, isPointer: isPointerType || isArrayType });
 				this.tokens.next(); // Read ;
@@ -545,6 +550,8 @@ class Parser {
 			}
 		}
 
+		this.maybeRewriteRef(topRef);
+
 		return topRef;
 	}
 
@@ -656,6 +663,8 @@ class Parser {
 			args.push(ast);
 		}
 
+		this.maybeRewriteRef(ref);
+
 		const funcCall: ASTFunctionCall = {
 			type: ASTType.FunctionCall,
 			reference: ref,
@@ -694,7 +703,7 @@ class Parser {
 		const expression = hasExpression ? this.parseAst() : null;
 		const decl: ASTVariableDeclaration = {
 			type: ASTType.VariableDeclaration,
-			name: name,
+			name: this.maybeRewriteName(name),
 			varType: varTypeRef,
 			expression: expression,
 			arraySizeExpression: arraySizeExpression
@@ -703,7 +712,8 @@ class Parser {
 		return decl;
 	}
 
-	private handleFunctionDeclaration(name: string, returnTypeRef: ASTReference) {
+	private handleFunctionDeclaration(name: string, returnTypeRef: ASTReference, preventRewrite = false) {
+		if (!preventRewrite) name = this.maybeRewriteName(name, true);
 		this.tokens.next(); // Read (
 
 		const params: TypedKey[] = [];
@@ -734,13 +744,30 @@ class Parser {
 
 		const func: ASTFunctionDeclaration = {
 			type: ASTType.FunctionDeclaration,
-			name: name,
+			name: this.maybeRewriteName(name),
 			parameters: params,
 			body: body,
 			returnType: returnTypeRef
 		};
 
 		return func;
+	}
+
+	private maybeRewriteName(name: string, allowNonTls = false) {
+		if (this.nameRewrites[name]) return this.nameRewrites[name];
+		if (this.file.exportSymbols.includes(name) || this.file.isRoot) return name;
+		if (name.startsWith("__")) return name;
+		if (!this.isTopLevelStatement && !allowNonTls) return name;
+
+		const newName = `__${this.file.name}_${name}`;
+		this.nameRewrites[name] = newName;
+		return newName;
+	}
+
+	private maybeRewriteRef(ref: ASTReference) {
+		if (this.nameRewrites[ref.key]) {
+			ref.key = this.nameRewrites[ref.key];
+		}
 	}
 
 	private maybeConsume(type: TokenType, value: string) {

@@ -1,4 +1,4 @@
-# TC Lang (TCL) specifications - Version 0.4
+# TC Lang (TCL) specifications - Version 0.5
 
 ## Table of contents
 
@@ -17,6 +17,7 @@
 13. [Literals](#literal-declaration)
 14. [Usage of goto](#usage-of-goto)
 15. [Full lists of specified reserved words](#full-list-of-reserved-words)  
+16. [Preprocessor directives](#preprocessor-directives)
 
 ## General specifications
 
@@ -39,20 +40,26 @@ Declaring a variable consists of:
 `var name`: The name of the variable, may not start with a digit and may only contain alphanumeric characters and underscores.  
 `Literal / Other var name`: Value of variable
 
-```
+```c
 const int two = 2;
+```
+
+Undefined variable declarations are also valid (applies to any data type):
+```c
+int two;
+MyStruct myStruct;
 ```
 
 ## Array declaration
 
 `<const> <type>[<array length>] <var name> = { <comma-separated elements> }`
 
-```
+```c
 const int[3] arr1 = {13, 14, 15};
 ```
 
 Dynamic array:
-```
+```c
 len = 3;
 int[len] arr2;
 
@@ -63,7 +70,7 @@ arr2[2] = 15;
 
 ## Array indexing
 
-```
+```c
 const int[3] arr = {13, 14, 15};
 
 arr[2]; // is equal to 15
@@ -74,12 +81,12 @@ arr[2]; // is equal to 15
 ### Pointer referencing:
 
 Let `x = 5` at mem address `0d240`
-```
+```c
 int ptr = *x; // ptr = 240
 ```
 
 ### Value dereferencing:
-```
+```c
 int val = &ptr; // val = 5
 ```
 
@@ -92,18 +99,19 @@ See: [List of reserved methods](#reserved-built-in-methods)
 `int`: integer with a length to be specified later  
 `char`: 8 bit wide integer useful for whatever requires knowing it is a character  
 `bool`: 1 bit wide integer useful for not confusing it with other stuff  
-`struct`: defines a class-like structure that may hold variables and methods. It is always static, as OOP and GC is hard.
+`struct`: defines a class-like structure that may hold variables and methods.
 
 Possibly for later implementations:  
 `float`: floating point number with a length to be specified later  
 
 ### Special non-primitive types that are part of the language
-
+#### `string`
 `string`: Array of chars
 
+#### `struct`
 **Note: structs have to be defined individually, not inline**  
 `struct`: 
-```
+```c
 struct Struct1 = {
     int val3;
 }
@@ -120,9 +128,41 @@ struct Type {
 }
 ```
 
+Accessing memebers of structs
+
+From pointer of a struct `struct1`:
+```c
+int val = struct1->val1;
+```
+
+From a struct `struct1`:
+```c
+int val = struct1.val1;
+```
+
+You may also stack struct accessers, let struct `struct1`:
+```c
+int val = struct1->val1.val2;
+int val = struct1.val1.val2;
+```
+
+You may reference to the current struct instance in a method by the keyword `this`:
+```c
+struct Type {
+    int num1;
+    int num2;
+
+    void method1(int num1) 
+    {
+        this.num1 = num1;
+    }
+}
+```
+#### `enum`
+
 `enum`:  
 With specific values for each key:
-```
+```c
 enum HTTPMethods {
     GET = 0,
     POST = 1,
@@ -131,7 +171,7 @@ enum HTTPMethods {
 ```
 
 With ordered values for each key, starting at 0:
-```
+```c
 enum HTTPMethods {
     GET,
     POST,
@@ -143,7 +183,7 @@ enum HTTPMethods {
 
 ### With blocks:
 `if` statements
-```
+```c
 if (boolean == true) 
 {
 
@@ -159,8 +199,35 @@ else
 ```
 
 `while` loops
-```
+```c
 while (boolean == true)
+{
+
+}
+```
+
+`for` loops
+```c
+for (statement1; statement2; statement3;)
+{
+
+}
+```
+`statement1`: initial state of the iterator  
+`statement2`: condition for for loop to run  
+`statement3`: operation on iterator at the end of the loop (including when called with `continue`)
+
+The first statement may be omitted, we then assume the iterator is the variable name provided in the 2nd statement and is an integer:
+```c
+for (; statement2; statement3;)
+{
+
+}
+```
+
+The first and third statements may be omitted, we then assume the iterator is the variable name provided in the 2nd statement and is an integer, and that at the end of the loop we do `iterator++`:
+```c
+for (; statement2;;)
 {
 
 }
@@ -168,7 +235,7 @@ while (boolean == true)
 
 ### Without blocks:
 `if` statements
-```
+```c
 if (boolean == true) 
     var += 1;
 elseif (boolean == true)
@@ -178,27 +245,49 @@ else
 ```
 
 `while` loops
-```
+```c
 while (boolean == true)
     method();
 ```
 
-`break`: Inside of a while loop, exits the loop  
-`continue`: Inside of a while loop, jumps to beginning of loop
+`for` loops
+```c
+for (statement1; statement2; statement3;)
+    method();
+```
+
+`break`: Inside of a loop, exits the loop  
+`continue`: Inside of a loop, jumps to beginning of loop
 
 ## Methods
 
 Does not support:
 - Varargs
 - Encapsulation
-```
+```c
 int method(int arg1, int arg2) {
     return arg1 + arg2;
 }
 ```
 
-```
+```c
 int val = method(2, 4);
+```
+
+If our method is a single statement, we may write it as such:
+```c
+int method(int arg1, int arg2) arg1 + arg2;
+
+int method(int arg1, int arg2)
+    arg1 + arg2;
+```
+
+`return` is implicit, but you may still specify it (it looks pretty):
+```c
+int method(int arg1, int arg2) return arg1 + arg2;
+
+int method(int arg1, int arg2)
+    return arg1 + arg2;
 ```
 
 ## Casting
@@ -213,7 +302,7 @@ Order of types:
 
 Allowing casts:
 
-```
+```c
 int num = 1;
 bool b1 = (bool) num; // If non-zero is true like in C++
 ```
@@ -262,6 +351,7 @@ Based on C-like languages
 | 1 | `()` | Function calls | L to R |
 | 1 | `[]` | Array indexing | L to R |
 | 1 | `.` | Struct member indexing | L to R |
+| 1 | `->` | Struct pointer member indexing | L to R |
 | 1 | `++` | Postfix increment | L to R |
 | 1 | `--` | Postifix decrement | L to R |
 | `2` | `! ~` | Logical/bitwise NOT | `R to L` |
@@ -297,6 +387,11 @@ Based on C-like languages
 - `int realloc(ptr, size)` - Reallocates memory at ptr with the new specified size, then returns the pointer. Returns -1 if it fails to do so
 - `int calloc(size)` - Allocates memory, sets all memory values to 0, then returns pointer. Returns -1 if it fails to do so
 - `void free(ptr)` - Frees memory at pointer
+- `int read(hardwareID)` - Returns next int from input buffer
+- `void write(hardwareID, int)` - Writes an int to the end of the input buffer
+- `int getOutputSize()` - Returns size of output buffer in B
+- `int getInputSize()` - Returns size of input buffer in B
+- `void memcopy(srcPtr, destPtr, byteSize)` - Copies a chunk of memory to another
 
 Think about:  
 TC supports multiple IO types, they are:
@@ -330,7 +425,7 @@ A line beginning with a colon (`:`) defines a label
 
 `goto` may then be used to jump to that part of the code. Try not to obliterate the stack.
 
-```
+```c
 if (yourMom) {
     :yourMom
     
@@ -341,7 +436,7 @@ if (yourMom) {
 ```
 
 ## Full list of reserved words
-```
+```c
 bool
 break
 calloc
@@ -352,6 +447,7 @@ else
 elseif
 enum
 false
+for
 float
 free
 goto
@@ -374,12 +470,13 @@ while
 ```
 
 ### Just keywords
-```
+```c
 break
 const
 continue
 else
 elseif
+for
 goto
 if
 return
@@ -388,7 +485,7 @@ while
 ```
 
 ### Just types
-```
+```c
 bool
 char
 enum
@@ -400,7 +497,7 @@ void
 ```
 
 ### Just methods
-```
+```c
 lengthof
 nextbyte
 outputbyte
@@ -413,7 +510,29 @@ free
 ```
 
 ### true/false
-```
+```c
 true
 false
 ```
+
+# Preprocessor directives
+In order to preprocess our directives, the hash symbol followed by one of the following reserved words is used:
+
+```c
+#import ./file/path/like
+#export MyType1
+#export MyStruct, YourStruct, OurStruct
+#exportall
+```
+
+Filepath structures:
+* `.` designates current directory
+* `..` designates parent directory
+* `/` or `\` designates a subdirectory
+* `*` designates everything inside of a directory
+
+When filepath reaches a file and not a directory, we may specificy the import of specific variables.
+
+These may be placed anywhere and however many times wanted.
+
+Top-level variables may not contain the same name if they are imported into the same file. Check for those collisions or I'm telling your mom what you bought this Christmas.

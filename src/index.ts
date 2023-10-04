@@ -1,14 +1,20 @@
 import fs from "fs";
 
 import { JSCompiler } from "./jsCompiler/jsCompiler.js";
+import { Linker } from "./parser/linker.js";
 import { Parser } from "./parser/parser.js";
 import { PreCompiler } from "./parser/precompiler.js";
 import { Tokenizer } from "./parser/tokenizer.js";
-import { UnitTester } from "./unitTests.js";
 
-let file: string;
-if (fs.existsSync("./code.txt")) file = fs.readFileSync("./code.txt", "utf-8");
-else file = fs.readFileSync("../code.txt", "utf-8");
+let filePath: string;
+if (fs.existsSync("./source/code.txt")) filePath = "./source/code.txt";
+else filePath = "../source/code.txt";
+
+const linker = new Linker();
+linker.loadFile(filePath);
+linker.compile("../out.js");
+
+process.exit();
 
 const precompiler = new PreCompiler(file);
 const stream = precompiler.preTokenize();
@@ -33,5 +39,5 @@ const js = compiler.compile(ast);
 
 fs.writeFileSync("../out.js", js);
 
-const ut = new UnitTester();
-ut.runTests();
+// const ut = new UnitTester();
+// ut.runTests();

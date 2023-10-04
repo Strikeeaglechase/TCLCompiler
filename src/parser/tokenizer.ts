@@ -82,10 +82,10 @@ class Tokenizer {
 		}
 		const value = chars.join("");
 
-		if (keywords.includes(value)) {
+		if (keywords.includes(value.trim())) {
 			this.tokens.push({
 				type: TokenType.Keyword,
-				value: value
+				value: value.trim()
 			});
 			return;
 		}
@@ -93,7 +93,7 @@ class Tokenizer {
 		if (identifierStartChars.includes(value[0])) {
 			this.tokens.push({
 				type: TokenType.Identifier,
-				value: value
+				value: value.trim()
 			});
 		} else {
 			this.tokens.push({

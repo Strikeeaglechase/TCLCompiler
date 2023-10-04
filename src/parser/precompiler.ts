@@ -20,7 +20,7 @@ class PreCompiler {
 		const output = this.input
 			.trim()
 			.split("\n")
-			.filter(l => !l.startsWith("#define"))
+			.filter(l => !l.startsWith("#"))
 			.join("\n")
 			.split("");
 
