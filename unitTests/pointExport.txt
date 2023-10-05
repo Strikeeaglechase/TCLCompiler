@@ -1,0 +1,32 @@
+struct Point {
+	int x;
+	int y;
+
+	Point op_add(Point* other) {
+		Point pt = {
+			x: this->x + other->x, 
+			y: this->y + other->y
+		};
+
+		return pt;
+	}
+}
+
+struct Point3D {
+	int x;
+	int y;
+	int z;
+}
+
+void printPoint(Point* pt) {
+	print(pt->x);
+	print(pt->y);
+}
+
+
+void internalFunction() {
+	printc('w');
+	printc('\n');
+}
+
+#export Point, Point3D, printPoint

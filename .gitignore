@@ -4,6 +4,7 @@ out.js
 outs
 tokens.txt
 source
+debug
 # Logs
 logs
 *.log

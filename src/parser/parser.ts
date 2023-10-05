@@ -83,7 +83,7 @@ class Parser {
 		// 	return result;
 		// }
 
-		if (next.type == TokenType.Operand && token.type != TokenType.Symbol && token.value != ";") {
+		if (next.type == TokenType.Operand && token.value != ";") {
 			return this.handleBinaryOperation(result);
 		}
 
@@ -138,10 +138,12 @@ class Parser {
 		const body = this.parseOptionallyBracketedBody();
 
 		const elIfs: ASTIfStatement[] = [];
+		this.maybeConsume(TokenType.Symbol, ";");
 		let next = this.tokens.peek();
 		while (next && next.type == TokenType.Keyword && next.value == "elseif") {
 			this.tokens.next(); // Read elseif
 			elIfs.push(this.handleIfStatement());
+			this.maybeConsume(TokenType.Symbol, ";");
 			next = this.tokens.peek();
 		}
 

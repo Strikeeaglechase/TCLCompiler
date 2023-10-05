@@ -1,0 +1,19 @@
+// EXPECT: 42
+// EXPECT: 72
+
+#import ./pointExport.txt
+
+void internalFunction() {
+	printc('I');
+	printc('\n');
+}
+
+
+Point pt = {x: 10, y: 20};
+Point pt2 = {x: 32, y: 52};
+
+Point res = pt.op_add(&pt2);
+print(res.x);
+print(res.y);
+
+internalFunction();

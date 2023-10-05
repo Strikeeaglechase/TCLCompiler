@@ -24,6 +24,7 @@ import {
 	ASTWhileStatement,
 	TypedKey
 } from "../parser/ast.js";
+import { Visitor } from "../parser/visitor.js";
 import { builtInFunctions } from "./builtInFunctions.js";
 
 interface Compiler {
@@ -74,12 +75,21 @@ interface Variable {
 
 class Context {
 	public variables: Record<string, Variable> = {};
-	// private stringHeap
-	private currentOffset = 0;
-	constructor(public parent: Context | null = null) {
-		if (parent) {
-			this.currentOffset = parent.currentOffset;
-		}
+	public currentOffset = 0;
+
+	constructor(private compiler: JSCompiler, private ast: AST[], public parent?: Context) {}
+
+	public setupVariables() {
+		const visitor = new Visitor(this.ast);
+		visitor.visit(node => this.handleAstNode(node), [ASTType.FunctionDeclaration]);
+	}
+
+	private handleAstNode(node: AST) {
+		if (node.type == ASTType.StructStatement) return this.compiler.handleStructDeclaration(node, false);
+		if (node.type == ASTType.EnumStatement) return this.compiler.handleEnumDeclaration(node);
+		if (node.type != ASTType.VariableDeclaration) return;
+		const type = this.compiler.resolveType(node.varType);
+		this.addVariable(node.name, type);
 	}
 
 	public getVariable(name: string): Variable {
@@ -105,14 +115,16 @@ class Context {
 
 const builtInTypes: Type[] = [
 	{ name: "int", size: 1, kind: TypeKind.BuiltIn },
-	{ name: "void", size: 0, kind: TypeKind.BuiltIn }
+	{ name: "void", size: 0, kind: TypeKind.BuiltIn },
+	{ name: "char", size: 1, kind: TypeKind.BuiltIn },
+	{ name: "bool", size: 1, kind: TypeKind.BuiltIn }
 ];
 
 const debug_logs = false;
 
 class JSCompiler implements Compiler {
 	public types: Record<string, Type> = {};
-	public context: Context = new Context();
+	public context: Context;
 	private functionInfos: Record<string, { argSize: number; returnType: Type }> = {};
 	private currentFunctionInfo: { argSize: number; returnType: Type };
 
@@ -167,7 +179,11 @@ class JSCompiler implements Compiler {
 	}
 
 	public compile(ast: ASTProg): string {
+		// Setup context
+		this.context = new Context(this, [ast]);
+		this.context.setupVariables();
 		let code = "";
+		code += `sp = ${this.context.currentOffset}; // Initialize sp for current context\n`;
 
 		ast.body.forEach(node => (code += this.handleNode(node)));
 
@@ -371,8 +387,8 @@ class JSCompiler implements Compiler {
 
 	private handleVariableDeclaration(node: ASTVariableDeclaration): string {
 		let code = "";
-		const type = this.resolveType(node.varType);
-		const variable = this.context.addVariable(node.name, type);
+		const variable = this.context.getVariable(node.name);
+		const type = variable.type;
 
 		if (node.arraySizeExpression) {
 			// Compute array size
@@ -380,10 +396,10 @@ class JSCompiler implements Compiler {
 			code += this.handleNode(node.arraySizeExpression);
 			code += `regC = pop();\n`;
 			code += `regC = regC * ${tp.size};\n`;
-			code += `set(fp + ${variable.offset}, fp + ${variable.offset} + 1); // Array pointer setup for ${node.name}\n`;
-			code += `sp += regC + 1; // Space for ${node.name}\n`;
+			code += `set(fp + ${variable.offset}, sp); // Array pointer setup for ${node.name}\n`;
+			code += `sp += regC; // Space for ${node.name}\n`;
 		} else {
-			code += `sp += ${variable.type.size}; // Space for ${node.name}\n`;
+			// code += `sp += ${variable.type.size}; // Space for ${node.name}\n`;
 		}
 
 		if (node.expression?.type == ASTType.InlineArrayAssignment || node.expression?.type == ASTType.InlineStructAssignment) {
@@ -411,7 +427,7 @@ class JSCompiler implements Compiler {
 	private handleStringAssignment(str: ASTString, variable: Variable): string {
 		let code = "";
 		const strAddr = this.getStringLiteralAddress(str);
-		code += `set(fp + ${variable.offset}, ${strAddr}); // Array pointer setup for ${variable.name}\n`;
+		code += `set(fp + ${variable.offset}, ${strAddr}); // String Array pointer setup for ${variable.name}\n`;
 
 		return code;
 	}
@@ -440,7 +456,7 @@ class JSCompiler implements Compiler {
 	}
 
 	// Types //
-	private handleStructDeclaration(structDecl: ASTStructStatement): string {
+	public handleStructDeclaration(structDecl: ASTStructStatement, doMethods = true): string {
 		const type: Type = {
 			name: structDecl.name,
 			fields: [],
@@ -463,6 +479,8 @@ class JSCompiler implements Compiler {
 
 		this.registerType(type);
 
+		if (!doMethods) return "";
+
 		let code = "\n";
 		structDecl.methods.forEach(method => {
 			// Rewrite name
@@ -483,7 +501,7 @@ class JSCompiler implements Compiler {
 		return code;
 	}
 
-	private handleEnumDeclaration(enumDecl: ASTEnumStatement): string {
+	public handleEnumDeclaration(enumDecl: ASTEnumStatement): string {
 		const enumType: EnumType = {
 			name: enumDecl.name,
 			kind: TypeKind.Enum,
@@ -611,7 +629,7 @@ class JSCompiler implements Compiler {
 
 	private handleFunctionDeclaration(node: ASTFunctionDeclaration): string {
 		let code = "";
-		this.context = new Context(this.context);
+		this.context = new Context(this, node.body, this.context);
 
 		code += `function ${node.name} () {\n`;
 
@@ -628,11 +646,13 @@ class JSCompiler implements Compiler {
 			this.context.addVariable(param.name, type);
 			argSize += type.size;
 		});
-		// console.log(node.parameters);
 
 		const returnType = this.resolveType(node.returnType);
 		this.functionInfos[node.name] = { argSize, returnType };
 		this.currentFunctionInfo = { argSize, returnType };
+
+		this.context.setupVariables();
+		code += `sp = fp + ${this.context.currentOffset}; // Initialize sp for current context\n`;
 
 		node.body.forEach(bodyNode => {
 			code += this.handleNode(bodyNode);
@@ -696,8 +716,8 @@ class JSCompiler implements Compiler {
 		let code = "";
 
 		code += this.handleNode(node.condition);
-		const ifE = elifIndex > 0 ? "else if" : "if";
-		code += `${ifE}(pop()) {\n `;
+		// const ifE = elifIndex > 0 ? "else if" : "if";
+		code += `if (pop()) {\n `;
 
 		node.body.forEach(node => (code += this.handleNode(node)));
 

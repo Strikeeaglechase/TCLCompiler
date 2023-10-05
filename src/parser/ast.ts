@@ -22,7 +22,8 @@ export enum ASTType {
 	Dereference = "Dereference",
 	PrePostOp = "PrePostOp",
 	UnaryOperation = "UnaryOperation",
-	Semi = "Semi"
+	Semi = "Semi",
+	Invalid = "Invalid"
 }
 
 export interface TypedKey {
@@ -203,3 +204,6 @@ export type AST =
 	| ASTPrePostOp
 	| ASTUnaryOperation
 	| ASTSemi;
+
+type DistributiveKeyOf<T> = T extends T ? keyof T : never;
+export type AnyASTKey = DistributiveKeyOf<AST>;

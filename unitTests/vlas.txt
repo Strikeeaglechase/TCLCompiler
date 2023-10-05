@@ -1,0 +1,32 @@
+// EXPECT: 42
+// EXPECT: 72
+// EXPECT: 58
+// EXPECT: 485
+// EXPECT: 389
+// EXPECT: 582
+// EXPECT: 53
+// EXPECT: 11
+// EXPECT: 12
+// EXPECT: 13
+// EXPECT: 14
+// EXPECT: 15
+
+void work() {
+	int a = 42;
+	int n = 5;
+	int[n] vars = {58, 485, 389, 582, 53};
+	int[n] vars2 = {11, 12, 13, 14, 15};
+	int b = 72;
+
+	print(a, b);
+
+	for (int i = 0; i < n; i++) {
+		print(vars[i]);
+	}
+
+	for (int i = 0; i < n; i++) {
+		print(vars2[i]);
+	}
+}
+
+work();

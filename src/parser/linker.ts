@@ -25,6 +25,10 @@ interface CompileUnit {
 class Linker {
 	private files: FileEntry[] = [];
 
+	constructor(private emitDebug: boolean = false) {
+		if (emitDebug && !fs.existsSync("../debug")) fs.mkdirSync("../debug");
+	}
+
 	public loadFile(file: string) {
 		this.readFile(file, true);
 	}
@@ -35,9 +39,12 @@ class Linker {
 			const stream = precompiler.preTokenize();
 			const tokenizer = new Tokenizer(stream);
 			const tokenizerTokens = tokenizer.parse();
+			this.debugTokensPrePC(f, tokenizerTokens);
 			const tokens = precompiler.postTokenize(tokenizerTokens);
+			this.debugTokensPostPC(f, tokens);
 			const parser = new Parser(tokens, f);
 			const ast = parser.parse();
+			this.debugAST(f, ast);
 
 			return { file: f, tokens, ast };
 		});
@@ -54,6 +61,44 @@ class Linker {
 		const compiler = new JSCompiler();
 		const js = compiler.compile(finalAst);
 		fs.writeFileSync(outputPath, js);
+	}
+
+	private debugTokensPrePC(file: FileEntry, tokens: Stream<Token>) {
+		if (!this.emitDebug) return;
+		const strTokens = tokens
+			._all()
+			.map(t => `${t.type} ${t.value}`)
+			.join("\n");
+
+		fs.writeFileSync(this.debugPath(file, "tokens-prepc.txt"), strTokens);
+	}
+
+	private debugTokensPostPC(file: FileEntry, tokens: Stream<Token>) {
+		if (!this.emitDebug) return;
+		const strTokens = tokens
+			._all()
+			.map(t => `${t.type} ${t.value}`)
+			.join("\n");
+
+		fs.writeFileSync(this.debugPath(file, "tokens.txt"), strTokens);
+	}
+
+	private debugAST(file: FileEntry, ast: ASTProg) {
+		if (!this.emitDebug) return;
+		const strAst = JSON.stringify(ast, null, 3);
+		fs.writeFileSync(this.debugPath(file, "ast.json"), strAst);
+
+		// const visitor = new Visitor([ast]);
+		// visitor.visit(
+		// 	node => {
+		// 		console.log(node.type);
+		// 	},
+		// 	[ASTType.FunctionDeclaration]
+		// );
+	}
+
+	private debugPath(file: FileEntry, name: string) {
+		return `../debug/${file.name}-${name}`;
 	}
 
 	private readFile(file: string, isRoot = false) {
