@@ -121,6 +121,7 @@ const builtInTypes: Type[] = [
 ];
 
 const debug_logs = false;
+const optimize = true;
 
 class JSCompiler implements Compiler {
 	public types: Record<string, Type> = {};
@@ -398,8 +399,6 @@ class JSCompiler implements Compiler {
 			code += `regC = regC * ${tp.size};\n`;
 			code += `set(fp + ${variable.offset}, sp); // Array pointer setup for ${node.name}\n`;
 			code += `sp += regC; // Space for ${node.name}\n`;
-		} else {
-			// code += `sp += ${variable.type.size}; // Space for ${node.name}\n`;
 		}
 
 		if (node.expression?.type == ASTType.InlineArrayAssignment || node.expression?.type == ASTType.InlineStructAssignment) {
@@ -408,15 +407,18 @@ class JSCompiler implements Compiler {
 			code += this.handleStringAssignment(node.expression, variable);
 		} else {
 			if (node.expression) {
-				code += this.handleNode(node.expression);
-				for (let i = 0; i < type.size; i++) {
-					code += `regC = pop();\n`;
-					code += `set(fp + ${variable.offset + (type.size - i - 1)}, regC); // Init variable ${node.name} at ${variable.offset}\n`;
+				if (optimize && node.expression.type == ASTType.Number) {
+					code += `set(fp + ${variable.offset}, ${node.expression.value}); // Init variable ${node.name} at ${variable.offset}\n`;
+				} else {
+					code += this.handleNode(node.expression);
+					for (let i = 0; i < type.size; i++) {
+						code += `regC = pop();\n`;
+						code += `set(fp + ${variable.offset + (type.size - i - 1)}, regC); // Init variable ${node.name} at ${variable.offset}\n`;
+					}
 				}
 			} else {
 				for (let i = 0; i < type.size; i++) {
-					code += `regC = pop();\n`;
-					code += `set(fp + ${variable.offset + (type.size - i - 1)}, regC); // Zero init variable ${node.name} at ${variable.offset}\n`;
+					code += `set(fp + ${variable.offset + (type.size - i - 1)}, 0); // Zero init variable ${node.name} at ${variable.offset}\n`;
 				}
 			}
 		}
@@ -437,18 +439,26 @@ class JSCompiler implements Compiler {
 		if (inline.type == ASTType.InlineArrayAssignment) {
 			code += `regE = ref(fp + ${variable.offset}); // Array pointer for ${variable.name}\n`;
 			inline.values.forEach((value, idx) => {
-				code += `push(regE);\n`;
-				code += this.handleNode(value);
-				code += `regC = pop();\n`;
-				code += `regE = pop();\n`;
-				code += `set(regE + ${idx * variable.type.size}, regC);\n`;
+				if (optimize && value.type == ASTType.Number) {
+					code += `set(regE + ${idx * variable.type.size}, ${value.value});\n`;
+				} else {
+					code += `push(regE);\n`;
+					code += this.handleNode(value);
+					code += `regC = pop();\n`;
+					code += `regE = pop();\n`;
+					code += `set(regE + ${idx * variable.type.size}, regC);\n`;
+				}
 			});
 		} else {
 			inline.keys.forEach((key, idx) => {
-				code += this.handleNode(key.value);
 				const offset = this.resolveStructKeyOffset(key.name, this.guardType(variable.type, TypeKind.Struct));
-				code += `regC = pop();\n`;
-				code += `set(fp + ${variable.offset + offset}, regC);\n`;
+				if (optimize && key.value.type == ASTType.Number) {
+					code += `set(fp + ${variable.offset + offset}, ${key.value.value});\n`;
+				} else {
+					code += this.handleNode(key.value);
+					code += `regC = pop();\n`;
+					code += `set(fp + ${variable.offset + offset}, regC);\n`;
+				}
 			});
 		}
 
@@ -716,7 +726,6 @@ class JSCompiler implements Compiler {
 		let code = "";
 
 		code += this.handleNode(node.condition);
-		// const ifE = elifIndex > 0 ? "else if" : "if";
 		code += `if (pop()) {\n `;
 
 		node.body.forEach(node => (code += this.handleNode(node)));
@@ -774,11 +783,15 @@ class JSCompiler implements Compiler {
 	// Math //
 	private handleBinaryExpression(node: ASTBinaryOperation): string {
 		let code = "";
-		code += this.handleNode(node.left);
-		code += this.handleNode(node.right);
-		code += `regB = pop();\n`;
-		code += `regA = pop();\n`;
-		code += `regC = regA ${node.operator} regB;\n`;
+		const optLhs = optimize && node.left.type == ASTType.Number;
+		const optRhs = optimize && node.right.type == ASTType.Number;
+		if (!optLhs) code += this.handleNode(node.left);
+		if (!optRhs) code += this.handleNode(node.right);
+		if (!optRhs) code += `regB = pop();\n`;
+		if (!optLhs) code += `regA = pop();\n`;
+		const lhs = optLhs ? (node.left as ASTNumber).value : "regA";
+		const rhs = optRhs ? (node.right as ASTNumber).value : "regB";
+		code += `regC = ${lhs} ${node.operator} ${rhs};\n`;
 		code += `push(regC);\n`;
 
 		return code;

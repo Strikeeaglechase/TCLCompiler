@@ -8,6 +8,8 @@ class UnitTester {
 	private testFiles: string[] = [];
 	private totalPassed = 0;
 	private totalTests = 0;
+	private totalLines = 0;
+
 	constructor() {
 		if (!fs.existsSync("../unitTests")) fs.mkdirSync("../unitTests");
 		if (!fs.existsSync("../unitTests/outs")) fs.mkdirSync("../unitTests/outs");
@@ -31,7 +33,7 @@ class UnitTester {
 		if (this.totalPassed == this.totalTests) rStr = chalk.green(rStr);
 		else rStr = chalk.red(rStr);
 
-		console.log(rStr + chalk.blue(` tests passed in ${end - start}ms`));
+		console.log(rStr + chalk.blue(` tests passed in ${end - start}ms. ${this.totalLines} total instructions`));
 	}
 
 	private runTest(testFile: string) {
@@ -47,7 +49,10 @@ class UnitTester {
 		linker.loadFile(sourcePath);
 		linker.compile(outputPath);
 
-		const result = execSync(`node ../unitTests/outs/${testFile}.js`).toString().trim().split("\n");
+		const result = execSync(`node ${outputPath}`).toString().trim().split("\n");
+		const lines = fs.readFileSync(outputPath, "utf-8").split("\n");
+		this.totalLines += lines.length;
+
 		let allPass = true;
 		expected.forEach((e, i) => {
 			this.totalTests++;
