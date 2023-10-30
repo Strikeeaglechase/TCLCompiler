@@ -1,5 +1,11 @@
 {
 	"cSpell.words": [
-		"precompiler"
+		"cmpeq",
+		"cmple",
+		"cmplt",
+		"cmpne",
+		"movif",
+		"precompiler",
+		"readoff"
 	]
 }

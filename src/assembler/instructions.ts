@@ -15,6 +15,7 @@ const instructions: Instruction[] = [
 	{ name: "halt", opcode: 0x01, argMap: [] },
 	{ name: "mov", opcode: 0x02, argMap: [ArgLocs.ArgA, ArgLocs.Dest] },
 	{ name: "movif", opcode: 0x03, argMap: [ArgLocs.ArgA, ArgLocs.ArgB, ArgLocs.Dest] },
+	{ name: "movifn", opcode: 0x04, argMap: [ArgLocs.ArgA, ArgLocs.ArgB, ArgLocs.Dest] },
 	{ name: "add", opcode: 0x06, argMap: [ArgLocs.ArgA, ArgLocs.ArgB, ArgLocs.Dest] },
 	{ name: "sub", opcode: 0x07, argMap: [ArgLocs.ArgA, ArgLocs.ArgB, ArgLocs.Dest] },
 	{ name: "mul", opcode: 0x08, argMap: [ArgLocs.ArgA, ArgLocs.ArgB, ArgLocs.Dest] },
@@ -33,7 +34,8 @@ const instructions: Instruction[] = [
 	{ name: "readoff", opcode: 0x15, argMap: [ArgLocs.ArgA, ArgLocs.ArgB, ArgLocs.Dest] },
 	{ name: "writeoff", opcode: 0x16, argMap: [ArgLocs.ArgA, ArgLocs.ArgB, ArgLocs.Dest] },
 	{ name: "push", opcode: 0x17, argMap: [ArgLocs.ArgA] },
-	{ name: "pop", opcode: 0x18, argMap: [ArgLocs.Dest] }
+	{ name: "pop", opcode: 0x18, argMap: [ArgLocs.Dest] },
+	{ name: "call", opcode: 0x19, argMap: [ArgLocs.ArgA, ArgLocs.Dest] }
 ];
 
 export { instructions, Instruction, ArgLocs };

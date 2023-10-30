@@ -6,6 +6,7 @@ outs
 tokens.txt
 source
 debug
+*.tca
 # Logs
 logs
 *.log

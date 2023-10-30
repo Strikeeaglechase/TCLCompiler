@@ -1,7 +1,7 @@
 import chalk from "chalk";
-import { execSync } from "child_process";
 import fs from "fs";
 
+import { ISACompiler } from "./isaCompiler/isaCompiler.js";
 import { Linker } from "./parser/linker.js";
 
 class UnitTester {
@@ -46,10 +46,31 @@ class UnitTester {
 		if (expected.length == 0) return;
 
 		const linker = new Linker();
-		linker.loadFile(sourcePath);
-		linker.compile(outputPath);
+		linker.addFileTransformer(f => {
+			let lines = f.content.split("\n");
+			lines = lines.map(l => {
+				if (!l.includes("print(")) return l;
+				const idx = l.indexOf("print(");
+				const endIdx = l.lastIndexOf(")");
+				const printArgs = l
+					.substring(idx + 6, endIdx)
+					.split(",")
+					.map(a => a.trim());
 
-		const result = execSync(`node ${outputPath}`).toString().trim().split("\n");
+				let result = "";
+
+				printArgs.forEach(arg => {
+					result += `write(65537, ${arg});`;
+				});
+
+				return result;
+			});
+		});
+
+		linker.loadFile(sourcePath);
+		linker.compile(outputPath, new ISACompiler());
+
+		// const result = execSync(`node ${outputPath}`).toString().trim().split("\n");
 		const lines = fs.readFileSync(outputPath, "utf-8").split("\n");
 		this.totalLines += lines.length;
 

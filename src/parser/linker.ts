@@ -1,7 +1,6 @@
 import fs from "fs";
 import path from "path";
 
-import { JSCompiler } from "../jsCompiler/jsCompiler.js";
 import { Stream } from "../stream.js";
 import { ASTProg, ASTType } from "./ast.js";
 import { Parser } from "./parser.js";
@@ -22,29 +21,55 @@ interface CompileUnit {
 	ast: ASTProg;
 }
 
+interface Compiler {
+	compile(ast: ASTProg): string;
+}
+
 class Linker {
 	private files: FileEntry[] = [];
 
-	constructor(private emitDebug: boolean = false) {
-		if (emitDebug && !fs.existsSync("../debug")) fs.mkdirSync("../debug");
+	private fileTransformers: ((file: FileEntry) => void)[] = [];
+	private tokenTransformers: ((tokens: Stream<Token>) => Stream<Token>)[] = [];
+	private astTransformers: ((ast: ASTProg) => ASTProg)[] = [];
+	private assemblyTransformers: ((assembly: string) => string)[] = [];
+
+	public addFileTransformer(transformer: (file: FileEntry) => void) {
+		this.fileTransformers.push(transformer);
+	}
+
+	public addTokenTransformer(transformer: (tokens: Stream<Token>) => Stream<Token>) {
+		this.tokenTransformers.push(transformer);
+	}
+
+	public addASTTransformer(transformer: (ast: ASTProg) => ASTProg) {
+		this.astTransformers.push(transformer);
+	}
+
+	public addAssemblyTransformer(transformer: (assembly: string) => string) {
+		this.assemblyTransformers.push(transformer);
 	}
 
 	public loadFile(file: string) {
 		this.readFile(file, true);
 	}
 
-	public compile(outputPath: string) {
+	public compile(outputPath: string, compiler: Compiler) {
 		const compileUnits: CompileUnit[] = this.files.map(f => {
+			// File
+			this.fileTransformers.forEach(t => t(f));
+
+			// Tokens
 			const precompiler = new PreCompiler(f.content);
 			const stream = precompiler.preTokenize();
 			const tokenizer = new Tokenizer(stream);
 			const tokenizerTokens = tokenizer.parse();
-			this.debugTokensPrePC(f, tokenizerTokens);
-			const tokens = precompiler.postTokenize(tokenizerTokens);
-			this.debugTokensPostPC(f, tokens);
+			let tokens = precompiler.postTokenize(tokenizerTokens);
+			for (const transformer of this.tokenTransformers) tokens = transformer(tokens);
+
+			// AST
 			const parser = new Parser(tokens, f);
-			const ast = parser.parse();
-			this.debugAST(f, ast);
+			let ast = parser.parse();
+			for (const transformer of this.astTransformers) ast = transformer(ast);
 
 			return { file: f, tokens, ast };
 		});
@@ -58,47 +83,9 @@ class Linker {
 			finalAst.body.push(...unit.ast.body);
 		});
 
-		const compiler = new JSCompiler();
-		const js = compiler.compile(finalAst);
-		fs.writeFileSync(outputPath, js);
-	}
-
-	private debugTokensPrePC(file: FileEntry, tokens: Stream<Token>) {
-		if (!this.emitDebug) return;
-		const strTokens = tokens
-			._all()
-			.map(t => `${t.type} ${t.value}`)
-			.join("\n");
-
-		fs.writeFileSync(this.debugPath(file, "tokens-prepc.txt"), strTokens);
-	}
-
-	private debugTokensPostPC(file: FileEntry, tokens: Stream<Token>) {
-		if (!this.emitDebug) return;
-		const strTokens = tokens
-			._all()
-			.map(t => `${t.type} ${t.value}`)
-			.join("\n");
-
-		fs.writeFileSync(this.debugPath(file, "tokens.txt"), strTokens);
-	}
-
-	private debugAST(file: FileEntry, ast: ASTProg) {
-		if (!this.emitDebug) return;
-		const strAst = JSON.stringify(ast, null, 3);
-		fs.writeFileSync(this.debugPath(file, "ast.json"), strAst);
-
-		// const visitor = new Visitor([ast]);
-		// visitor.visit(
-		// 	node => {
-		// 		console.log(node.type);
-		// 	},
-		// 	[ASTType.FunctionDeclaration]
-		// );
-	}
-
-	private debugPath(file: FileEntry, name: string) {
-		return `../debug/${file.name}-${name}`;
+		let assembly = compiler.compile(finalAst);
+		for (const transformer of this.assemblyTransformers) assembly = transformer(assembly);
+		fs.writeFileSync(outputPath, assembly);
 	}
 
 	private readFile(file: string, isRoot = false) {
@@ -118,7 +105,7 @@ class Linker {
 			.filter(l => l.startsWith("#export"))
 			.forEach(es => {
 				const symbols = es.match(/#export (.+)/)[1];
-				exportSymbols.push(...symbols.split(","));
+				exportSymbols.push(...symbols.split(",").map(s => s.trim()));
 			});
 
 		const name = path.basename(file).split(".")[0];
@@ -134,4 +121,4 @@ class Linker {
 	}
 }
 
-export { Linker, FileEntry, CompileUnit };
+export { Linker, FileEntry, CompileUnit, Compiler };

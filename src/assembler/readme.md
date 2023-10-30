@@ -22,9 +22,10 @@
 | `cmplt`     | `a`       | `b`       | `dst`     | `0x13`     | Compares two registers to be less than                   |
 | `cmple`     | `a`       | `b`       | `dst`     | `0x14`     | Compares two registers to be less than or equal          |
 | `readoff`   | `addr`    | `offset`  | `dst`     | `0x15`     | Reads from memory at addr + offset and stores in dst     |
-| `writeoff`  | `addr`    | `src`     | `offset`  | `0x16`     | Writes to memory at addr + offset from src               |
+| `writeoff`  | `src`     | `addr`    | `offset`  | `0x16`     | Writes to memory at addr + offset from src               |
 | `push`      | `val`     |           |           | `0x17`     | Pushes a value onto the stack                            |
 | `pop`       |           |           | `dst`     | `0x18`     | Pops a value off the stack into dst                      |
+| `call`      | `addr`    |           | `dest`    | `0x19`     | Sets mem at fp to pc and sets dest to addr               |
 
 ## Argument types
 

@@ -26,7 +26,7 @@ import {
 } from "../parser/ast.js";
 import { Compiler } from "../parser/linker.js";
 import { Visitor } from "../parser/visitor.js";
-import { builtInFunctions } from "./builtInFunctions.js";
+import { builtInFunctions } from "./builtinFunctions.js";
 
 enum TypeKind {
 	Struct,
@@ -74,7 +74,7 @@ class Context {
 	public variables: Record<string, Variable> = {};
 	public currentOffset = 0;
 
-	constructor(private compiler: JSCompiler, private ast: AST[], public parent?: Context) {}
+	constructor(private compiler: ISACompiler, private ast: AST[], public parent?: Context) {}
 
 	public setupVariables() {
 		const visitor = new Visitor(this.ast);
@@ -117,10 +117,9 @@ const builtInTypes: Type[] = [
 	{ name: "bool", size: 1, kind: TypeKind.BuiltIn }
 ];
 
-const debug_logs = false;
 const optimize = true;
 
-class JSCompiler implements Compiler {
+class ISACompiler implements Compiler {
 	public types: Record<string, Type> = {};
 	public context: Context;
 	private functionInfos: Record<string, { argSize: number; returnType: Type }> = {};
@@ -130,39 +129,37 @@ class JSCompiler implements Compiler {
 	private stackSize = 1024;
 	private heapInit = this.stackSize + 1;
 
-	constructor(private semiTerminatedLines: string[] = []) {
+	private exitLabels: string[] = [];
+
+	private labelId = 0;
+
+	constructor() {
 		builtInTypes.forEach(type => this.registerType(type));
 	}
 
 	private getSetupCode() {
 		let code = "";
-		code += `// Setup\n`;
-		code += `const stack_size = ${this.stackSize};\n`;
-		code += `let fp = 0; // Frame pointer\n`;
-		code += `let sp = fp; // Stack pointer\n`;
-		code += `const stack = [];\n`;
-		code += `const push = (value) => stack[sp++] = value;\n`;
-		code += `const pop = () => stack[--sp];\n`;
-		code += `const ref = (idx) => stack[idx];\n`;
-		code += `const set = (idx, value) => stack[idx] = value;\n`;
-		code += `let hp = stack_size + ${this.heapInit}; // Heap pointer\n`;
-		code += `const malloc = (size) => { const result = hp; hp += size; return result; };\n`;
-		code += `let regA = 0; // Math A\n`;
-		code += `let regB = 0; // Math B\n`;
-		code += `let regC = 0; // Intermittent/General\n`;
-		code += `let regD = 0; // Function call setup\n`;
-		code += `let regE = 0; // Pointer logic\n`;
-		code += `let printBuffer = "";\n`;
-		code += `const print = (value) => {printBuffer += value; if (value[value.length - 1] == "\\n") output(); }\n`;
-		code += `const output = () => { if(printBuffer[printBuffer.length-1] == "\\n") printBuffer = printBuffer.substring(0, printBuffer.length - 1); console.log(printBuffer); printBuffer = ""; }\n`;
+		code += `# Setup\n`;
+		code += `#define stack_size ${this.stackSize}\n`;
+		code += `#define pc R1   # Program counter\n`;
+		code += `#define sp R2   # Stack pointer\n`;
+		code += `#define fp R3   # Frame pointer\n`;
+		code += `#define hp R4   # Heap pointer\n`;
+		code += `mov ${this.stackSize + this.heapInit} hp   # Initialize heap pointer\n`;
+		code += `#define regA R5   # Math A\n`;
+		code += `#define regB R6   # Math B\n`;
+		code += `#define regC R6   # Intermittent/General\n`;
+		code += `#define regD R7   # Function call setup\n`;
+		code += `#define regE R8   # Pointer logic\n`;
+		// code += `#define ret readoff R3 0 R1  # Return macro\n`;
 
 		code += `\n`;
-		code += `// String init:\n`;
+		code += `# String init:\n`;
 		Object.keys(this.stringHeap).forEach(key => {
 			key.split("").forEach((char, idx) => {
-				code += `set(${this.stringHeap[key] + idx}, ${char.charCodeAt(0)}); // String[${idx}] char: ${char}\n`;
+				code += `mov ${char.charCodeAt(0)} M${this.stringHeap[key] + idx}  # String[${idx}] char: ${char}\n`;
 			});
-			code += `set(${this.stringHeap[key] + key.length}, 0); // Null terminate string\n`;
+			code += `mov 0 M${this.stringHeap[key] + key.length}  # Null terminate string\n`;
 		});
 		code += `\n`;
 
@@ -171,9 +168,36 @@ class JSCompiler implements Compiler {
 
 	private getTearDownCode() {
 		let code = "";
-		// code += `console.log({ stack, sp, fp, regA, regB, regC });\n`;
-
+		code += `halt  # Exit\n`;
 		return code;
+	}
+
+	private formatFinalOutput(code: string): string {
+		let longestLineLength = 0;
+
+		const lines = code.split("\n");
+		lines.forEach(line => {
+			const lineLength = line.indexOf("#") == -1 ? line.length : line.indexOf("#");
+			longestLineLength = Math.max(longestLineLength, lineLength);
+		});
+
+		let result = "";
+		lines.forEach((line, idx) => {
+			if (!line.includes("#")) {
+				result += line + "\n";
+				return;
+			}
+
+			if (line.startsWith("#")) {
+				result += line + "\n";
+				return;
+			}
+
+			const [code, comment] = line.split("#");
+			result += code.padEnd(longestLineLength + 3) + "# " + comment.trim() + "\n";
+		});
+
+		return result;
 	}
 
 	public compile(ast: ASTProg): string {
@@ -181,16 +205,17 @@ class JSCompiler implements Compiler {
 		this.context = new Context(this, [ast]);
 		this.context.setupVariables();
 		let code = "";
-		code += `sp = ${this.context.currentOffset}; // Initialize sp for current context\n`;
+		code += `mov ${this.context.currentOffset} sp  # Initialize sp for current context\n`;
 
 		ast.body.forEach(node => (code += this.handleNode(node)));
 
 		const result = this.getSetupCode() + code + this.getTearDownCode();
-		return result;
+
+		return this.formatFinalOutput(result);
 	}
 
 	public handleNode(node: AST): string {
-		let prefix = `/*${node.type}*/ `;
+		let prefix = `# ${node.type}\n`;
 		const exec = () => {
 			switch (node.type) {
 				case ASTType.IfStatement:
@@ -247,7 +272,7 @@ class JSCompiler implements Compiler {
 			// Enum value ref
 			const enumValue = enumType.values.find(value => value.name == node.child.key);
 			if (!enumValue) throw new Error(`Unknown enum key: ${node.child.key}`);
-			return `push(${enumValue.value}); // Enum ${node.key}.${node.child.key}\n`;
+			return `push ${enumValue.value}  # Enum ${node.key}.${node.child.key}\n`;
 		}
 
 		let code = "";
@@ -255,11 +280,10 @@ class JSCompiler implements Compiler {
 		code += chainCode;
 
 		for (let i = 0; i < type.size; i++) {
-			code += `regC = ref(regE + ${i}); // ${this.debugReference(node)}\n`;
-			code += `push(regC);\n`;
+			code += `readoff regE ${i} regC  # ${this.debugReference(node)}\n`;
+			code += `push regC\n`;
 		}
 
-		if (debug_logs) code += `console.log("ref ${this.debugReference(node)}: " + regC);\n`;
 		return code;
 	}
 
@@ -273,10 +297,10 @@ class JSCompiler implements Compiler {
 		let code = "";
 		if (node.dereference) {
 			// Get what variable is pointing to as base
-			code += `regE = ref(fp + ${variable.offset}); // Deref ${variable.name}\n`;
+			code += `readoff fp ${variable.offset} regE  # Deref ${variable.name}\n`;
 			type = this.guardType(type, TypeKind.Pointer).baseType;
 		} else {
-			code += `regE = fp + ${variable.offset}; // Set to address of ${variable.name}\n`;
+			code += `add fp ${variable.offset} regE  # Set to address of ${variable.name}\n`;
 		}
 
 		// Calculate relative offsets
@@ -285,23 +309,26 @@ class JSCompiler implements Compiler {
 				if (child.dereference) {
 					const st = this.guardType(this.guardType(type, TypeKind.Pointer).baseType, TypeKind.Struct);
 					const structKey = st.fields.find(field => field.name == child.key);
-					// code += `regC =  // Deref parent for ${structKey.name}\n`;
-					code += `regE = ref(regE) + ${structKey.offset}; // Deref parent and move forward to ${structKey.name}\n`;
+					code += `readoff regE 0 regE  # Deref parent\n`;
+					code += `add regE ${structKey.offset} regE  # Move forward to ${structKey.name}\n`;
 					type = structKey.type;
 				} else {
 					const st = this.guardType(type, TypeKind.Struct);
 					const structKey = st.fields.find(field => field.name == child.key);
-					code += `regE = regE + ${structKey.offset}; // Move forward to ${structKey.name}\n`;
+					code += `add regE ${structKey.offset} regE  # Move forward to ${structKey.name}\n`;
 					type = structKey.type;
 				}
 			}
 
 			if (child.arrayIndex) {
-				code += `push(regE); // Protect regE for array index\n`;
+				code += `push regE  # Protect regE for array index\n`;
 				code += this.handleNode(child.arrayIndex);
-				code += `regC = pop();\n`;
-				code += `regE = ref(pop());\n`;
-				code += `regE = regE + (regC * ${type.size}); // Move forward to array index\n`;
+				// code += `regC = pop();\n`;
+				code += `pop regC\n`;
+				code += `pop regE\n`;
+				code += `readoff regE 0 regE  # Deref parent\n`;
+				code += `mul regC ${type.size} regC  # Array index calc\n`;
+				code += `add regE regC regE\n`;
 			}
 		});
 
@@ -349,7 +376,7 @@ class JSCompiler implements Compiler {
 		let code = "";
 		const { code: chainCode, type } = this.getAddressOfVariable(node.reference);
 		code += chainCode;
-		code += `push(regE); // Get address ${this.debugReference(node.reference)}\n`;
+		code += `push regE  # Get address ${this.debugReference(node.reference)}\n`;
 
 		return code;
 	}
@@ -357,18 +384,14 @@ class JSCompiler implements Compiler {
 	private handleDereference(node: ASTDereference): string {
 		let code = "";
 		code += this.handleNode(node.expression);
-		code += `regC = pop();\n`;
-		code += `push(ref(regC)); // Dereference \n`;
+		code += `pop regC\n`;
+		code += `readoff regC 0 regC  # Dereference\n`;
+		code += `push regC\n`;
 
 		return code;
 	}
 
 	private handleVariableAssignment(node: ASTVariableAssignment): string {
-		// const { offset, type, isPointer } = this.getReferenceChain(node.reference);
-
-		// const chain = this.getReferenceChain(node.reference);
-		// const type = chain[chain.length - 1].type;
-
 		let code = "";
 		code += this.handleNode(node.expression);
 
@@ -376,8 +399,8 @@ class JSCompiler implements Compiler {
 		code += chainCode;
 
 		for (let i = 0; i < type.size; i++) {
-			code += `regC = pop();\n`;
-			code += `set(regE + ${type.size - i - 1}, regC); // Assign ${this.debugReference(node.reference)}\n`;
+			code += `pop regC\n`;
+			code += `writeoff regC regE ${type.size - i - 1}  # Assign ${this.debugReference(node.reference)}\n`;
 		}
 
 		return code;
@@ -392,10 +415,10 @@ class JSCompiler implements Compiler {
 			// Compute array size
 			const tp = this.guardType(type, TypeKind.Pointer);
 			code += this.handleNode(node.arraySizeExpression);
-			code += `regC = pop();\n`;
-			code += `regC = regC * ${tp.size};\n`;
-			code += `set(fp + ${variable.offset}, sp); // Array pointer setup for ${node.name}\n`;
-			code += `sp += regC; // Space for ${node.name}\n`;
+			code += `pop regC\n`;
+			code += `mul regC ${tp.size} regC\n`;
+			code += `writeoff sp fp ${variable.offset}  # Array pointer setup for ${node.name}\n`;
+			code += `add sp regC sp  # Space for ${node.name}\n`;
 		}
 
 		if (node.expression?.type == ASTType.InlineArrayAssignment || node.expression?.type == ASTType.InlineStructAssignment) {
@@ -405,17 +428,17 @@ class JSCompiler implements Compiler {
 		} else {
 			if (node.expression) {
 				if (optimize && node.expression.type == ASTType.Number) {
-					code += `set(fp + ${variable.offset}, ${node.expression.value}); // Init variable ${node.name} at ${variable.offset}\n`;
+					code += `writeoff ${node.expression.value} fp ${variable.offset}  # Init variable ${node.name} at ${variable.offset}\n`;
 				} else {
 					code += this.handleNode(node.expression);
 					for (let i = 0; i < type.size; i++) {
-						code += `regC = pop();\n`;
-						code += `set(fp + ${variable.offset + (type.size - i - 1)}, regC); // Init variable ${node.name} at ${variable.offset}\n`;
+						code += `pop regC\n`;
+						code += `writeoff regC fp ${variable.offset + (type.size - i - 1)}  # Init variable ${node.name} at ${variable.offset}\n`;
 					}
 				}
 			} else {
 				for (let i = 0; i < type.size; i++) {
-					code += `set(fp + ${variable.offset + (type.size - i - 1)}, 0); // Zero init variable ${node.name} at ${variable.offset}\n`;
+					code += `writeoff 0 fp ${variable.offset + (type.size - i - 1)}  # Zero init variable ${node.name} at ${variable.offset}\n`;
 				}
 			}
 		}
@@ -426,35 +449,34 @@ class JSCompiler implements Compiler {
 	private handleStringAssignment(str: ASTString, variable: Variable): string {
 		let code = "";
 		const strAddr = this.getStringLiteralAddress(str);
-		code += `set(fp + ${variable.offset}, ${strAddr}); // String Array pointer setup for ${variable.name}\n`;
-
+		code += `writeoff ${strAddr} fp ${variable.offset}  # String Array pointer setup for ${variable.name}\n`;
 		return code;
 	}
 
 	private handleInlineAssignment(variable: Variable, inline: ASTInlineArrayAssignment | ASTInlineStructAssignment): string {
 		let code = "";
 		if (inline.type == ASTType.InlineArrayAssignment) {
-			code += `regE = ref(fp + ${variable.offset}); // Array pointer for ${variable.name}\n`;
+			code += `readoff fp ${variable.offset} regE  # Array pointer for ${variable.name}\n`;
 			inline.values.forEach((value, idx) => {
 				if (optimize && value.type == ASTType.Number) {
-					code += `set(regE + ${idx * variable.type.size}, ${value.value});\n`;
+					code += `writeoff ${value.value} regE ${idx * variable.type.size}\n`;
 				} else {
-					code += `push(regE);\n`;
+					code += `push regE\n`;
 					code += this.handleNode(value);
-					code += `regC = pop();\n`;
-					code += `regE = pop();\n`;
-					code += `set(regE + ${idx * variable.type.size}, regC);\n`;
+					code += `pop regC\n`;
+					code += `pop regE\n`;
+					code += `writeoff regC regE ${idx * variable.type.size}\n`;
 				}
 			});
 		} else {
 			inline.keys.forEach((key, idx) => {
 				const offset = this.resolveStructKeyOffset(key.name, this.guardType(variable.type, TypeKind.Struct));
 				if (optimize && key.value.type == ASTType.Number) {
-					code += `set(fp + ${variable.offset + offset}, ${key.value.value});\n`;
+					code += `writeoff ${key.value.value} fp ${variable.offset + offset}\n`;
 				} else {
 					code += this.handleNode(key.value);
-					code += `regC = pop();\n`;
-					code += `set(fp + ${variable.offset + offset}, regC);\n`;
+					code += `pop regC\n`;
+					code += `writeoff regC fp ${variable.offset + offset}\n`;
 				}
 			});
 		}
@@ -591,10 +613,10 @@ class JSCompiler implements Compiler {
 		let code = "";
 		if (node.dereference) {
 			// Get what variable is pointing to as base
-			code += `regE = ref(fp + ${variable.offset}); // Deref ${variable.name}\n`;
+			code += `readoff fp ${variable.offset} regE  # Deref ${variable.name}\n`;
 			type = this.guardType(type, TypeKind.Pointer).baseType;
 		} else {
-			code += `regE = fp + ${variable.offset}; // Set to address of ${variable.name}\n`;
+			code += `add fp ${variable.offset} regE  # Set to address of ${variable.name}\n`;
 		}
 
 		// Calculate relative offsets
@@ -603,32 +625,34 @@ class JSCompiler implements Compiler {
 				if (child.dereference) {
 					const st = this.guardType(this.guardType(type, TypeKind.Pointer).baseType, TypeKind.Struct);
 					const structKey = st.fields.find(field => field.name == child.key);
-					// code += `regC =  // Deref parent for ${structKey.name}\n`;
-					code += `regE = ref(regE) + ${structKey.offset}; // Deref parent and move forward to ${structKey.name}\n`;
+					code += `readoff regE 0 regE  # Deref parent\n`;
+					code += `add regE ${structKey.offset} regE  # Move forward to ${structKey.name}\n`;
 					type = structKey.type;
 				} else {
 					const st = this.guardType(type, TypeKind.Struct);
 					const structKey = st.fields.find(field => field.name == child.key);
-					code += `regE = regE + ${structKey.offset}; // Move forward to ${structKey.name}\n`;
+					code += `add regE ${structKey.offset} regE  # Move forward to ${structKey.name}\n`;
 					type = structKey.type;
 				}
 			}
 
 			if (child.arrayIndex) {
-				code += `push(regE); // Protect regE for array index\n`;
+				code += `push regE; // Protect regE for array index\n`;
 				code += this.handleNode(child.arrayIndex);
-				code += `regC = pop();\n`;
-				code += `regE = ref(pop());\n`;
-				code += `regE = regE + (regC * ${type.size}); // Move forward to array index\n`;
+				code += `pop regC\n`;
+				code += `pop regE\n`;
+				code += `readoff regE 0 regE  # Deref parent\n`;
+				code += `mul regC ${type.size} regC  # Array index calc\n`;
+				code += `add regE regC regE\n`;
 			}
 		});
 
 		if (type.kind == TypeKind.Pointer) {
 			type = type.baseType;
-			code += `regE = ref(regE); // Funct final deref\n`;
+			code += `readoff regE 0 regE  # Funct final deref\n`;
 		}
 
-		code += `push(regE); // Push thisarg pointer\n`;
+		code += `push regE  # Push thisarg pointer\n`;
 		const name = `__${type.name}_${children.at(-1).key}`;
 
 		return { name: name, thisargSetup: code };
@@ -638,7 +662,10 @@ class JSCompiler implements Compiler {
 		let code = "";
 		this.context = new Context(this, node.body, this.context);
 
-		code += `function ${node.name} () {\n`;
+		const functionGuardLabel = `__function_guard_${node.name}`;
+
+		code += `mov ${functionGuardLabel} pc  # Function guard\n`;
+		code += `:func_${node.name}  # Function ${node.name}\n`;
 
 		let argSize = 0;
 		const fpParam: TypedKey = {
@@ -646,7 +673,14 @@ class JSCompiler implements Compiler {
 			type: "int",
 			isPointer: false
 		};
-		node.parameters.unshift(fpParam);
+
+		const pcParam: TypedKey = {
+			name: "__returnPc",
+			type: "int",
+			isPointer: false
+		};
+
+		node.parameters.unshift(pcParam, fpParam);
 
 		node.parameters.forEach((param, idx) => {
 			const type = this.resolveType(param);
@@ -659,14 +693,18 @@ class JSCompiler implements Compiler {
 		this.currentFunctionInfo = { argSize, returnType };
 
 		this.context.setupVariables();
-		code += `sp = fp + ${this.context.currentOffset}; // Initialize sp for current context\n`;
+		// code += `mov regD fp  # Setup fp for current context\n`;
+		code += `add fp ${this.context.currentOffset} sp  # Initialize sp for current context\n`;
 
 		node.body.forEach(bodyNode => {
 			code += this.handleNode(bodyNode);
 		});
-		code += `sp = fp + ${returnType.size + argSize}; // Tear down\n`;
 
-		code += `}\n`;
+		code += `add fp ${returnType.size + argSize} sp  # Tear down\n`;
+		code += `readoff fp 0 regC  # Return ref\n`;
+		code += `add regC 1 pc  # Return jump\n`;
+
+		code += `:${functionGuardLabel}\n`;
 
 		this.context = this.context.parent;
 
@@ -678,25 +716,25 @@ class JSCompiler implements Compiler {
 		if (builtIn) return builtIn.handleCall(node, this);
 
 		const { name: functionName, thisargSetup } = this.resolveFunctionName(node.reference);
+		const functionInfo = this.functionInfos[functionName];
+		if (!functionInfo) throw new Error(`Unknown function: ${functionName}`);
 
 		let code = "";
 
-		code += `regD = sp; // Setup call ${functionName}\n`; // This will be fp for the method
-		if (debug_logs) code += `console.log("Setting up ${functionName}, stack pointer pre args is " + sp);\n`;
-
-		code += `push(fp);\n`; // First argument is the frame pointer
-		if (debug_logs) code += `console.log("Pushed fp " + fp);\n`;
+		code += `add sp ${functionInfo.returnType.size} sp  # Preallocate return value\n`; // Preallocate return value
+		code += `mov sp regD  # Setup call ${functionName}\n`; // This will be fp for the method
+		code += `push 0\n`; // First arg, will be overwritten by return address
+		code += `push fp\n`; // Second arg, frame pointer
 
 		if (thisargSetup) code += thisargSetup;
 		node.arguments.forEach((arg, idx) => {
-			code += this.handleNode(arg) + `// ^ Argument ${idx}\n`;
+			code += this.handleNode(arg) + `# ^ Argument ${idx}\n`;
 		});
 
-		code += `fp = regD; // Setup call ${functionName}\n`; // Give the function the fp with args
-		code += `${functionName}(); // Call\n`;
-		// code += `fp = ref(fp + ${functionInfo.argSize - 1}); // Restore fp\n`; // Restore fp
-		code += `fp = ref(fp); // Restore fp\n`; // Restore fp
-		if (debug_logs) code += `console.log("Returned from ${functionName} and restored fp: " + fp);\n`;
+		code += `mov regD fp  # Setup fp for current context\n`;
+		code += `call func_${functionName} pc  # Call\n`;
+
+		code += `readoff fp 1 fp  # Restore fp\n`; // Restore fp from arg1
 		return code;
 	}
 
@@ -708,12 +746,16 @@ class JSCompiler implements Compiler {
 		const argSize = this.currentFunctionInfo.argSize;
 
 		// Copy return value to frame pointer
+		const argProtOffset = 2; // Protect return address and fp
+
 		for (let i = 0; i < retSize; i++) {
-			code += `set(fp + ${i} + 1, ref(sp - ${retSize - i})); // Return copy\n`;
+			code += `readoff sp ${-retSize + i} regC  # Return copy\n`;
+			code += `writeoff regC fp ${-retSize + i}  # Return copy\n`;
 		}
 
-		code += `sp = fp + ${retSize + argSize}; // Tear down\n`;
-		code += `return;\n`;
+		code += `mov fp sp  # Tear down\n`;
+		code += `readoff fp 0 regC  # Return ref\n`;
+		code += `add regC 1 pc  # Return jump\n`;
 
 		return code;
 	}
@@ -723,24 +765,29 @@ class JSCompiler implements Compiler {
 		let code = "";
 
 		code += this.handleNode(node.condition);
-		code += `if (pop()) {\n `;
+		const ifLabel = `if_${this.labelId++}`;
+		code += `pop regC\n`;
+		code += `movifn ${ifLabel} regC pc\n`;
 
 		node.body.forEach(node => (code += this.handleNode(node)));
 
-		code += `}\n`;
+		code += `:${ifLabel}\n`;
 
-		const nextElIf = node.elseIfs[elifIndex];
-		if (nextElIf) {
-			code += `else {\n`;
-			code += this.handleIfStatement(nextElIf, elifIndex + 1);
-			code += `}\n`;
-		} else {
-			if (node.elseBody) {
-				code += `else {\n`;
-				node.elseBody.forEach(node => (code += this.handleNode(node)));
-				code += `}\n`;
-			}
-		}
+		// const nextElIf = node.elseIfs[elifIndex];
+		// if (nextElIf) {
+		// 	// code += `else {\n`;
+		// 	const elseLabel = `else_${this.labelId++}`;
+		// 	code += `movif ${elseLabel} regC pc\n`;
+		// 	code += this.handleIfStatement(nextElIf, elifIndex + 1);
+
+		// 	// code += `}\n`;
+		// } else {
+		// 	if (node.elseBody) {
+		// 		code += `else {\n`;
+		// 		node.elseBody.forEach(node => (code += this.handleNode(node)));
+		// 		code += `}\n`;
+		// 	}
+		// }
 
 		return code;
 	}
@@ -748,14 +795,21 @@ class JSCompiler implements Compiler {
 	private handleWhileStatement(node: ASTWhileStatement): string {
 		let code = "";
 
-		code += `while (true) {\n`;
+		// code += `while (true) {\n`;
+		const whileLoopLabel = `while_${this.labelId++}`;
+		const whileEndLabel = `while_end_${this.labelId++}`;
 
+		code += `:${whileLoopLabel}\n`;
 		code += this.handleNode(node.condition);
-		code += `if (!pop()) break;\n`;
+		code += `pop regC\n`;
+		code += `movifn ${whileEndLabel} regC pc\n`;
 
+		this.exitLabels.push(whileEndLabel);
 		node.body.forEach(node => (code += this.handleNode(node)));
+		this.exitLabels.pop();
 
-		code += `}\n`;
+		code += `mov ${whileLoopLabel} pc\n`;
+		code += `:${whileEndLabel}\n`;
 
 		return code;
 	}
@@ -764,32 +818,71 @@ class JSCompiler implements Compiler {
 		let code = "";
 
 		if (node.initialization) code += this.handleNode(node.initialization);
-		code += `while(true) {\n`;
+		const forLoopLabel = `for_${this.labelId++}`;
+		const forEndLabel = `for_end_${this.labelId++}`;
+
+		code += `:${forLoopLabel}\n`;
 		if (node.condition) {
 			code += this.handleNode(node.condition);
-			code += `if(!pop()) break;\n`;
+			code += `pop regC\n`;
+			code += `movifn ${forEndLabel} regC pc\n`;
 		}
+
+		this.exitLabels.push(forEndLabel);
 		node.body.forEach(node => (code += this.handleNode(node)));
 		if (node.iteration) code += this.handleNode(node.iteration);
+		this.exitLabels.pop();
 
-		code += `}\n`;
+		code += `mov ${forLoopLabel} pc\n`;
+		code += `:${forEndLabel}\n`;
 
 		return code;
 	}
 
 	// Math //
 	private handleBinaryExpression(node: ASTBinaryOperation): string {
+		const opInstructionMap = {
+			"+": "add",
+			"-": "sub",
+			"*": "mul",
+			"/": "div",
+			"%": "mod",
+			"&": "and",
+			"|": "or",
+			"^": "xor",
+			"<<": "shl",
+			">>": "shr",
+			"&&": "and",
+			"||": "or",
+			"==": "cmpeq",
+			"!=": "cmpne",
+			"<": "cmplt",
+			"<=": "cmple"
+		};
+
 		let code = "";
 		const optLhs = optimize && node.left.type == ASTType.Number;
 		const optRhs = optimize && node.right.type == ASTType.Number;
 		if (!optLhs) code += this.handleNode(node.left);
 		if (!optRhs) code += this.handleNode(node.right);
-		if (!optRhs) code += `regB = pop();\n`;
-		if (!optLhs) code += `regA = pop();\n`;
-		const lhs = optLhs ? (node.left as ASTNumber).value : "regA";
-		const rhs = optRhs ? (node.right as ASTNumber).value : "regB";
-		code += `regC = ${lhs} ${node.operator} ${rhs};\n`;
-		code += `push(regC);\n`;
+		if (!optRhs) code += `pop regB\n`;
+		if (!optLhs) code += `pop regA\n`;
+
+		let lhs = optLhs ? (node.left as ASTNumber).value : "regA";
+		let rhs = optRhs ? (node.right as ASTNumber).value : "regB";
+		let operator = node.operator;
+
+		if (node.operator == ">" || node.operator == ">=") {
+			const swap = lhs;
+			lhs = rhs;
+			rhs = swap;
+			operator = node.operator.replace(">", "<");
+		}
+
+		const op = opInstructionMap[operator];
+		if (!op) throw new Error(`Unknown operator: ${operator}`);
+		code += `${op} ${lhs} ${rhs} regC\n`;
+		code += `push regC\n`;
 
 		return code;
 	}
@@ -807,15 +900,26 @@ class JSCompiler implements Compiler {
 	private handleUnaryExpression(node: ASTUnaryOperation): string {
 		let code = "";
 		code += this.handleNode(node.expression);
-		code += `regA = pop();\n`;
-		code += `regC = ${node.operator}regA;\n`;
-		code += `push(regC);\n`;
+		code += `pop regA\n`;
+		switch (node.operator) {
+			case "++":
+				code += `add regA 1 regC\n`;
+				break;
+			case "--":
+				code += `sub regA 1 regC\n`;
+				break;
+			case "!":
+				code += `not regA regC\n`;
+				break;
+		}
+
+		code += `push regC\n`;
 
 		return code;
 	}
 
 	private handleNumberLiteral(node: ASTNumber): string {
-		return `push(${node.value}); // Num lit ${node.value}\n`;
+		return `push ${node.value}  # Num lit ${node.value}\n`;
 	}
 
 	private getStringLiteralAddress(node: ASTString): number {
@@ -833,8 +937,8 @@ class JSCompiler implements Compiler {
 
 	private handleStringLiteral(node: ASTString): string {
 		const key = this.getStringLiteralAddress(node);
-		return `push(${key}); // String literal ${node.value} at ${key}\n`;
+		return `push ${key}  # String literal ${node.value} at ${key}\n`;
 	}
 }
 
-export { Compiler, JSCompiler, Context };
+export { ISACompiler, Context };
