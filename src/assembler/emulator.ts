@@ -259,8 +259,13 @@ class TCEmulator {
 	private ticks = 0;
 	public running = true;
 
-	constructor(source: string) {
-		const assembler = new Assembler(source);
+	private testingOutput: (msg: string | number) => void = null;
+
+	constructor(source: string, testingOutput?: (msg: string | number) => void) {
+		if (testingOutput) this.testingOutput = testingOutput;
+
+		const assembler = new Assembler();
+		assembler.loadFile(source);
 		this.code = assembler.getPreprocessedFile().split("\n");
 
 		assembler.compile("../out.bin");
@@ -269,12 +274,18 @@ class TCEmulator {
 	}
 
 	private loadMappedDevices() {
-		const outputDevice = new MemoryMappedIO(printAddr, printAddr + 1);
+		const outputDevice = new MemoryMappedIO(printAddr, printAddr + 10);
 		outputDevice.onWriteTo(0, (addr, value) => {
-			console.log(`Write: ${value}`);
+			if (this.testingOutput) this.testingOutput(value);
+			else console.log(`Write: ${value}`);
 		});
 		outputDevice.onWriteTo(1, (addr, value) => {
-			console.log(`DBG Write: ${value}`);
+			if (this.testingOutput) this.testingOutput(value);
+			else console.log(`DBG Write: ${value}`);
+		});
+		outputDevice.onWriteTo(2, (addr, value) => {
+			if (this.testingOutput) this.testingOutput(String.fromCharCode(value));
+			else console.log(`Write: ${String.fromCharCode(value)}`);
 		});
 
 		this.mappedDevices.push(outputDevice);
@@ -283,9 +294,11 @@ class TCEmulator {
 	public run() {
 		while (this.running) this.tick();
 
-		console.log(`Program finished in ${this.ticks} ticks`);
-		console.log(`PC: ${this.registers[pc]}`);
-		console.log(`SP: ${this.registers[sp]}`);
+		if (!this.testingOutput) {
+			console.log(`Program finished in ${this.ticks} ticks`);
+			console.log(`PC: ${this.registers[pc]}`);
+			console.log(`SP: ${this.registers[sp]}`);
+		}
 		// console.log(this.registers);
 	}
 

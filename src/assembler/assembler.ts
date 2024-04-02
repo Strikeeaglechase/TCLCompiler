@@ -20,9 +20,15 @@ class Assembler {
 	private labels: { [key: string]: number } = {};
 	private defines: { [key: string]: string } = {};
 
-	constructor(source: string) {
+	constructor() {}
+
+	public loadFile(source: string) {
 		const file = fs.readFileSync(source, "utf-8");
-		this.lines = file
+		this.loadText(file);
+	}
+
+	public loadText(text: string) {
+		this.lines = text
 			.split("\n")
 			.map(l => l.trim())
 			.filter(l => l.length > 0);

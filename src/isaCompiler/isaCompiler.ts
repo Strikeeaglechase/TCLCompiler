@@ -25,6 +25,7 @@ import {
 	TypedKey
 } from "../parser/ast.js";
 import { Compiler } from "../parser/linker.js";
+import { TokenType } from "../parser/tokenizer.js";
 import { Visitor } from "../parser/visitor.js";
 import { builtInFunctions } from "./builtinFunctions.js";
 
@@ -86,7 +87,7 @@ class Context {
 		if (node.type == ASTType.EnumStatement) return this.compiler.handleEnumDeclaration(node);
 		if (node.type != ASTType.VariableDeclaration) return;
 		const type = this.compiler.resolveType(node.varType);
-		this.addVariable(node.name, type);
+		this.addVariable(node.name.value, type);
 	}
 
 	public getVariable(name: string): Variable {
@@ -215,6 +216,7 @@ class ISACompiler implements Compiler {
 	}
 
 	public handleNode(node: AST): string {
+		if (node == null) return "";
 		let prefix = `# ${node.type}\n`;
 		const exec = () => {
 			switch (node.type) {
@@ -267,12 +269,12 @@ class ISACompiler implements Compiler {
 	// References //
 	private getVariableReference(node: ASTReference): string {
 		// Maybe an enum?
-		const enumType = this.types[node.key];
+		const enumType = this.types[node.key.value];
 		if (enumType && enumType.kind == TypeKind.Enum) {
 			// Enum value ref
-			const enumValue = enumType.values.find(value => value.name == node.child.key);
-			if (!enumValue) throw new Error(`Unknown enum key: ${node.child.key}`);
-			return `push ${enumValue.value}  # Enum ${node.key}.${node.child.key}\n`;
+			const enumValue = enumType.values.find(value => value.name == node.child.key.value);
+			if (!enumValue) throw new Error(`Unknown enum key: ${node.child.key.value}`);
+			return `push ${enumValue.value}  # Enum ${node.key.value}.${node.child.key.value}\n`;
 		}
 
 		let code = "";
@@ -288,7 +290,7 @@ class ISACompiler implements Compiler {
 	}
 
 	public getAddressOfVariable(node: ASTReference): { code: string; type: Type } {
-		const variable = this.context.getVariable(node.key);
+		const variable = this.context.getVariable(node.key.value);
 
 		const children = this.getChildren(node);
 
@@ -308,13 +310,13 @@ class ISACompiler implements Compiler {
 			if (child.key) {
 				if (child.dereference) {
 					const st = this.guardType(this.guardType(type, TypeKind.Pointer).baseType, TypeKind.Struct);
-					const structKey = st.fields.find(field => field.name == child.key);
+					const structKey = st.fields.find(field => field.name == child.key.value);
 					code += `readoff regE 0 regE  # Deref parent\n`;
 					code += `add regE ${structKey.offset} regE  # Move forward to ${structKey.name}\n`;
 					type = structKey.type;
 				} else {
 					const st = this.guardType(type, TypeKind.Struct);
-					const structKey = st.fields.find(field => field.name == child.key);
+					const structKey = st.fields.find(field => field.name == child.key.value);
 					code += `add regE ${structKey.offset} regE  # Move forward to ${structKey.name}\n`;
 					type = structKey.type;
 				}
@@ -408,7 +410,7 @@ class ISACompiler implements Compiler {
 
 	private handleVariableDeclaration(node: ASTVariableDeclaration): string {
 		let code = "";
-		const variable = this.context.getVariable(node.name);
+		const variable = this.context.getVariable(node.name.value);
 		const type = variable.type;
 
 		if (node.arraySizeExpression) {
@@ -417,7 +419,7 @@ class ISACompiler implements Compiler {
 			code += this.handleNode(node.arraySizeExpression);
 			code += `pop regC\n`;
 			code += `mul regC ${tp.size} regC\n`;
-			code += `writeoff sp fp ${variable.offset}  # Array pointer setup for ${node.name}\n`;
+			code += `writeoff sp fp ${variable.offset}  # Array pointer setup for ${node.name.value}\n`;
 			code += `add sp regC sp  # Space for ${node.name}\n`;
 		}
 
@@ -428,17 +430,17 @@ class ISACompiler implements Compiler {
 		} else {
 			if (node.expression) {
 				if (optimize && node.expression.type == ASTType.Number) {
-					code += `writeoff ${node.expression.value} fp ${variable.offset}  # Init variable ${node.name} at ${variable.offset}\n`;
+					code += `writeoff ${node.expression.value} fp ${variable.offset}  # Init variable ${node.name.value} at ${variable.offset}\n`;
 				} else {
 					code += this.handleNode(node.expression);
 					for (let i = 0; i < type.size; i++) {
 						code += `pop regC\n`;
-						code += `writeoff regC fp ${variable.offset + (type.size - i - 1)}  # Init variable ${node.name} at ${variable.offset}\n`;
+						code += `writeoff regC fp ${variable.offset + (type.size - i - 1)}  # Init variable ${node.name.value} at ${variable.offset}\n`;
 					}
 				}
 			} else {
 				for (let i = 0; i < type.size; i++) {
-					code += `writeoff 0 fp ${variable.offset + (type.size - i - 1)}  # Zero init variable ${node.name} at ${variable.offset}\n`;
+					code += `writeoff 0 fp ${variable.offset + (type.size - i - 1)}  # Zero init variable ${node.name.value} at ${variable.offset}\n`;
 				}
 			}
 		}
@@ -470,7 +472,7 @@ class ISACompiler implements Compiler {
 			});
 		} else {
 			inline.keys.forEach((key, idx) => {
-				const offset = this.resolveStructKeyOffset(key.name, this.guardType(variable.type, TypeKind.Struct));
+				const offset = this.resolveStructKeyOffset(key.name.value, this.guardType(variable.type, TypeKind.Struct));
 				if (optimize && key.value.type == ASTType.Number) {
 					code += `writeoff ${key.value.value} fp ${variable.offset + offset}\n`;
 				} else {
@@ -486,8 +488,9 @@ class ISACompiler implements Compiler {
 
 	// Types //
 	public handleStructDeclaration(structDecl: ASTStructStatement, doMethods = true): string {
+		// console.log(`Setting up struct ${structDecl.name.value}, methods: ${doMethods}`);
 		const type: Type = {
-			name: structDecl.name,
+			name: structDecl.name.value,
 			fields: [],
 			size: 0,
 			kind: TypeKind.Struct
@@ -496,7 +499,7 @@ class ISACompiler implements Compiler {
 		let idx = 0;
 		structDecl.keys.forEach(field => {
 			const fieldSize = this.resolveType(field);
-			type.fields.push({ type: fieldSize, name: field.name, offset: idx });
+			type.fields.push({ type: fieldSize, name: field.name.value, offset: idx });
 			if (field.arrExpr) {
 				if (field.arrExpr.type != ASTType.Number) throw new Error(`Expected number for struct array size but got ${field.arrExpr.type}`);
 				idx += fieldSize.size * (field.arrExpr as ASTNumber).value;
@@ -513,12 +516,12 @@ class ISACompiler implements Compiler {
 		let code = "\n";
 		structDecl.methods.forEach(method => {
 			// Rewrite name
-			method.name = "__" + structDecl.name + "_" + method.name;
+			method.name.value = "__" + structDecl.name.value + "_" + method.name.value;
 			// Push thisarg as first argument
 			const thisParam: TypedKey = {
-				name: "this",
+				name: { value: "this", type: TokenType.Identifier, line: 0, column: 0 },
 				isPointer: true,
-				type: structDecl.name
+				type: structDecl.name.value
 			};
 
 			method.parameters.unshift(thisParam);
@@ -532,7 +535,7 @@ class ISACompiler implements Compiler {
 
 	public handleEnumDeclaration(enumDecl: ASTEnumStatement): string {
 		const enumType: EnumType = {
-			name: enumDecl.name,
+			name: enumDecl.name.value,
 			kind: TypeKind.Enum,
 			values: [],
 			size: 1
@@ -552,7 +555,7 @@ class ISACompiler implements Compiler {
 
 		if (ref.type == ASTType.Reference) {
 			const r = ref as ASTReference;
-			type = this.types[r.key + (r.dereference ? "*" : "")];
+			type = this.types[r.key.value + (r.dereference ? "*" : "")];
 		} else {
 			const r = ref as TypedKey;
 			type = this.types[r.type + (r.isPointer ? "*" : "")];
@@ -579,6 +582,7 @@ class ISACompiler implements Compiler {
 	}
 
 	private registerType(type: Type) {
+		// console.log(`Registering type: ${type.name}`);
 		this.types[type.name] = type;
 		// Create pointer type
 		const pointerType: PointerType = {
@@ -603,10 +607,10 @@ class ISACompiler implements Compiler {
 	// Functions //
 	private resolveFunctionName(node: ASTReference) {
 		if (!node.child) {
-			return { name: node.key, thisargSetup: null };
+			return { name: node.key.value, thisargSetup: null };
 		}
 
-		const variable = this.context.getVariable(node.key);
+		const variable = this.context.getVariable(node.key.value);
 		const children = this.getChildren(node);
 		let type = variable.type;
 
@@ -624,13 +628,13 @@ class ISACompiler implements Compiler {
 			if (child.key) {
 				if (child.dereference) {
 					const st = this.guardType(this.guardType(type, TypeKind.Pointer).baseType, TypeKind.Struct);
-					const structKey = st.fields.find(field => field.name == child.key);
+					const structKey = st.fields.find(field => field.name == child.key.value);
 					code += `readoff regE 0 regE  # Deref parent\n`;
 					code += `add regE ${structKey.offset} regE  # Move forward to ${structKey.name}\n`;
 					type = structKey.type;
 				} else {
 					const st = this.guardType(type, TypeKind.Struct);
-					const structKey = st.fields.find(field => field.name == child.key);
+					const structKey = st.fields.find(field => field.name == child.key.value);
 					code += `add regE ${structKey.offset} regE  # Move forward to ${structKey.name}\n`;
 					type = structKey.type;
 				}
@@ -653,7 +657,7 @@ class ISACompiler implements Compiler {
 		}
 
 		code += `push regE  # Push thisarg pointer\n`;
-		const name = `__${type.name}_${children.at(-1).key}`;
+		const name = `__${type.name}_${children.at(-1).key.value}`;
 
 		return { name: name, thisargSetup: code };
 	}
@@ -662,20 +666,20 @@ class ISACompiler implements Compiler {
 		let code = "";
 		this.context = new Context(this, node.body, this.context);
 
-		const functionGuardLabel = `__function_guard_${node.name}`;
+		const functionGuardLabel = `__function_guard_${node.name.value}`;
 
 		code += `mov ${functionGuardLabel} pc  # Function guard\n`;
-		code += `:func_${node.name}  # Function ${node.name}\n`;
+		code += `:func_${node.name.value}  # Function ${node.name.value}\n`;
 
 		let argSize = 0;
 		const fpParam: TypedKey = {
-			name: "__previousFp",
+			name: { value: "__previousFp", type: TokenType.Identifier, line: 0, column: 0 },
 			type: "int",
 			isPointer: false
 		};
 
 		const pcParam: TypedKey = {
-			name: "__returnPc",
+			name: { value: "__returnPc", type: TokenType.Identifier, line: 0, column: 0 },
 			type: "int",
 			isPointer: false
 		};
@@ -684,12 +688,12 @@ class ISACompiler implements Compiler {
 
 		node.parameters.forEach((param, idx) => {
 			const type = this.resolveType(param);
-			this.context.addVariable(param.name, type);
+			this.context.addVariable(param.name.value, type);
 			argSize += type.size;
 		});
 
 		const returnType = this.resolveType(node.returnType);
-		this.functionInfos[node.name] = { argSize, returnType };
+		this.functionInfos[node.name.value] = { argSize, returnType };
 		this.currentFunctionInfo = { argSize, returnType };
 
 		this.context.setupVariables();
@@ -712,7 +716,7 @@ class ISACompiler implements Compiler {
 	}
 
 	private handleFunctionCall(node: ASTFunctionCall): string {
-		const builtIn = builtInFunctions.find(func => func.name == node.reference.key);
+		const builtIn = builtInFunctions.find(func => func.name == node.reference.key.value);
 		if (builtIn) return builtIn.handleCall(node, this);
 
 		const { name: functionName, thisargSetup } = this.resolveFunctionName(node.reference);
@@ -870,13 +874,13 @@ class ISACompiler implements Compiler {
 
 		let lhs = optLhs ? (node.left as ASTNumber).value : "regA";
 		let rhs = optRhs ? (node.right as ASTNumber).value : "regB";
-		let operator = node.operator;
+		let operator = node.operator.value;
 
-		if (node.operator == ">" || node.operator == ">=") {
+		if (operator == ">" || operator == ">=") {
 			const swap = lhs;
 			lhs = rhs;
 			rhs = swap;
-			operator = node.operator.replace(">", "<");
+			operator = operator.replace(">", "<");
 		}
 
 		const op = opInstructionMap[operator];
@@ -908,9 +912,17 @@ class ISACompiler implements Compiler {
 			case "--":
 				code += `sub regA 1 regC\n`;
 				break;
-			case "!":
+			case "~":
 				code += `not regA regC\n`;
 				break;
+			case "!":
+				code += `cmpeq regA 0 regC\n`;
+				break;
+			case "-":
+				code += `not regA regC\nadd regC 1 regC\n`;
+				break;
+			default:
+				throw new Error(`Unknown unary operator: ${node.operator}`);
 		}
 
 		code += `push regC\n`;

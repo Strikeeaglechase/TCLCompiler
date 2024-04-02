@@ -25,6 +25,7 @@ import {
 	TypedKey
 } from "../parser/ast.js";
 import { Compiler } from "../parser/linker.js";
+import { TokenType } from "../parser/tokenizer.js";
 import { Visitor } from "../parser/visitor.js";
 import { builtInFunctions } from "./builtInFunctions.js";
 
@@ -86,7 +87,7 @@ class Context {
 		if (node.type == ASTType.EnumStatement) return this.compiler.handleEnumDeclaration(node);
 		if (node.type != ASTType.VariableDeclaration) return;
 		const type = this.compiler.resolveType(node.varType);
-		this.addVariable(node.name, type);
+		this.addVariable(node.name.value, type);
 	}
 
 	public getVariable(name: string): Variable {
@@ -242,10 +243,10 @@ class JSCompiler implements Compiler {
 	// References //
 	private getVariableReference(node: ASTReference): string {
 		// Maybe an enum?
-		const enumType = this.types[node.key];
+		const enumType = this.types[node.key.value];
 		if (enumType && enumType.kind == TypeKind.Enum) {
 			// Enum value ref
-			const enumValue = enumType.values.find(value => value.name == node.child.key);
+			const enumValue = enumType.values.find(value => value.name == node.child.key.value);
 			if (!enumValue) throw new Error(`Unknown enum key: ${node.child.key}`);
 			return `push(${enumValue.value}); // Enum ${node.key}.${node.child.key}\n`;
 		}
@@ -264,7 +265,7 @@ class JSCompiler implements Compiler {
 	}
 
 	public getAddressOfVariable(node: ASTReference): { code: string; type: Type } {
-		const variable = this.context.getVariable(node.key);
+		const variable = this.context.getVariable(node.key.value);
 
 		const children = this.getChildren(node);
 
@@ -284,13 +285,13 @@ class JSCompiler implements Compiler {
 			if (child.key) {
 				if (child.dereference) {
 					const st = this.guardType(this.guardType(type, TypeKind.Pointer).baseType, TypeKind.Struct);
-					const structKey = st.fields.find(field => field.name == child.key);
+					const structKey = st.fields.find(field => field.name == child.key.value);
 					// code += `regC =  // Deref parent for ${structKey.name}\n`;
 					code += `regE = ref(regE) + ${structKey.offset}; // Deref parent and move forward to ${structKey.name}\n`;
 					type = structKey.type;
 				} else {
 					const st = this.guardType(type, TypeKind.Struct);
-					const structKey = st.fields.find(field => field.name == child.key);
+					const structKey = st.fields.find(field => field.name == child.key.value);
 					code += `regE = regE + ${structKey.offset}; // Move forward to ${structKey.name}\n`;
 					type = structKey.type;
 				}
@@ -385,7 +386,7 @@ class JSCompiler implements Compiler {
 
 	private handleVariableDeclaration(node: ASTVariableDeclaration): string {
 		let code = "";
-		const variable = this.context.getVariable(node.name);
+		const variable = this.context.getVariable(node.name.value);
 		const type = variable.type;
 
 		if (node.arraySizeExpression) {
@@ -448,7 +449,7 @@ class JSCompiler implements Compiler {
 			});
 		} else {
 			inline.keys.forEach((key, idx) => {
-				const offset = this.resolveStructKeyOffset(key.name, this.guardType(variable.type, TypeKind.Struct));
+				const offset = this.resolveStructKeyOffset(key.name.value, this.guardType(variable.type, TypeKind.Struct));
 				if (optimize && key.value.type == ASTType.Number) {
 					code += `set(fp + ${variable.offset + offset}, ${key.value.value});\n`;
 				} else {
@@ -465,7 +466,7 @@ class JSCompiler implements Compiler {
 	// Types //
 	public handleStructDeclaration(structDecl: ASTStructStatement, doMethods = true): string {
 		const type: Type = {
-			name: structDecl.name,
+			name: structDecl.name.value,
 			fields: [],
 			size: 0,
 			kind: TypeKind.Struct
@@ -474,7 +475,7 @@ class JSCompiler implements Compiler {
 		let idx = 0;
 		structDecl.keys.forEach(field => {
 			const fieldSize = this.resolveType(field);
-			type.fields.push({ type: fieldSize, name: field.name, offset: idx });
+			type.fields.push({ type: fieldSize, name: field.name.value, offset: idx });
 			if (field.arrExpr) {
 				if (field.arrExpr.type != ASTType.Number) throw new Error(`Expected number for struct array size but got ${field.arrExpr.type}`);
 				idx += fieldSize.size * (field.arrExpr as ASTNumber).value;
@@ -491,12 +492,12 @@ class JSCompiler implements Compiler {
 		let code = "\n";
 		structDecl.methods.forEach(method => {
 			// Rewrite name
-			method.name = "__" + structDecl.name + "_" + method.name;
+			method.name.value = "__" + structDecl.name + "_" + method.name;
 			// Push thisarg as first argument
 			const thisParam: TypedKey = {
-				name: "this",
+				name: { value: "this", type: TokenType.Identifier, line: 0, column: 0 },
 				isPointer: true,
-				type: structDecl.name
+				type: structDecl.name.value
 			};
 
 			method.parameters.unshift(thisParam);
@@ -510,7 +511,7 @@ class JSCompiler implements Compiler {
 
 	public handleEnumDeclaration(enumDecl: ASTEnumStatement): string {
 		const enumType: EnumType = {
-			name: enumDecl.name,
+			name: enumDecl.name.value,
 			kind: TypeKind.Enum,
 			values: [],
 			size: 1
@@ -584,7 +585,7 @@ class JSCompiler implements Compiler {
 			return { name: node.key, thisargSetup: null };
 		}
 
-		const variable = this.context.getVariable(node.key);
+		const variable = this.context.getVariable(node.key.value);
 		const children = this.getChildren(node);
 		let type = variable.type;
 
@@ -602,13 +603,13 @@ class JSCompiler implements Compiler {
 			if (child.key) {
 				if (child.dereference) {
 					const st = this.guardType(this.guardType(type, TypeKind.Pointer).baseType, TypeKind.Struct);
-					const structKey = st.fields.find(field => field.name == child.key);
+					const structKey = st.fields.find(field => field.name == child.key.value);
 					// code += `regC =  // Deref parent for ${structKey.name}\n`;
 					code += `regE = ref(regE) + ${structKey.offset}; // Deref parent and move forward to ${structKey.name}\n`;
 					type = structKey.type;
 				} else {
 					const st = this.guardType(type, TypeKind.Struct);
-					const structKey = st.fields.find(field => field.name == child.key);
+					const structKey = st.fields.find(field => field.name == child.key.value);
 					code += `regE = regE + ${structKey.offset}; // Move forward to ${structKey.name}\n`;
 					type = structKey.type;
 				}
@@ -642,7 +643,7 @@ class JSCompiler implements Compiler {
 
 		let argSize = 0;
 		const fpParam: TypedKey = {
-			name: "__previousFp",
+			name: { value: "__previousFp", type: TokenType.Identifier, line: 0, column: 0 },
 			type: "int",
 			isPointer: false
 		};
@@ -650,12 +651,12 @@ class JSCompiler implements Compiler {
 
 		node.parameters.forEach((param, idx) => {
 			const type = this.resolveType(param);
-			this.context.addVariable(param.name, type);
+			this.context.addVariable(param.name.value, type);
 			argSize += type.size;
 		});
 
 		const returnType = this.resolveType(node.returnType);
-		this.functionInfos[node.name] = { argSize, returnType };
+		this.functionInfos[node.name.value] = { argSize, returnType };
 		this.currentFunctionInfo = { argSize, returnType };
 
 		this.context.setupVariables();
@@ -674,7 +675,7 @@ class JSCompiler implements Compiler {
 	}
 
 	private handleFunctionCall(node: ASTFunctionCall): string {
-		const builtIn = builtInFunctions.find(func => func.name == node.reference.key);
+		const builtIn = builtInFunctions.find(func => func.name == node.reference.key.value);
 		if (builtIn) return builtIn.handleCall(node, this);
 
 		const { name: functionName, thisargSetup } = this.resolveFunctionName(node.reference);

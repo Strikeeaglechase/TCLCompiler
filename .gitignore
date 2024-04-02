@@ -1,12 +1,12 @@
 ast.json
-code.txt
 out.js
 out.bin
 outs
+out.*
 tokens.txt
-source
+ldebug
+
 debug
-*.tca
 # Logs
 logs
 *.log

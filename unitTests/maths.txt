@@ -10,13 +10,13 @@ int c = 4 / 2;
 int d = 8 * 5;
 print(c, d);
 
-// EXPECT: false
-// EXPECT: true
+// EXPECT: 0
+// EXPECT: 1
 int e = 1 == 2;
 int d = 1 != 2;
 print(e, d);
 
-// EXPECT: true
+// EXPECT: 1
 // EXPECT: -6
 // EXPECT: 6
 int f = !(1 == 2);

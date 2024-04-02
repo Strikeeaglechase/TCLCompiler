@@ -4,6 +4,7 @@ import {
 	ASTBinaryOperation,
 	ASTDereference,
 	ASTEnumStatement,
+	ASTEnumValue,
 	ASTForStatement,
 	ASTFunctionCall,
 	ASTFunctionDeclaration,
@@ -29,17 +30,68 @@ import {
 import { FileEntry } from "./linker.js";
 import { operandPrecedence, Token, TokenType } from "./tokenizer.js";
 
+type Positional = { line: number; column: number; lineEnd?: number; columnEnd?: number };
+function getLastPos(ast: Positional | Positional[], fallback?: Positional) {
+	if ((Array.isArray(ast) && ast.length == 0) || !ast) return getLastPos(fallback);
+	const last = Array.isArray(ast) ? ast[ast.length - 1] : ast;
+	if (last.lineEnd) {
+		return {
+			line: last.lineEnd,
+			column: last.columnEnd
+		};
+	}
+
+	return {
+		line: last.line,
+		column: last.column
+	};
+}
+
+function correctOrderPos(a: Positional, b: Positional) {
+	const sameLine = a.line == b.line;
+	if (a.line < b.line || (sameLine && a.column < b.column)) {
+		const bEnd = getLastPos(b);
+		return {
+			line: a.line,
+			column: a.column,
+
+			lineEnd: bEnd.line,
+			columnEnd: bEnd.column
+		};
+	} else {
+		const aEnd = getLastPos(a);
+		return {
+			line: b.line,
+			column: b.column,
+
+			lineEnd: aEnd.line,
+			columnEnd: aEnd.column
+		};
+	}
+}
+
+interface ParserError {
+	token: Token;
+	message: string;
+	line: number;
+	column: number;
+}
+
 class Parser {
 	private types: string[] = ["void", "int"];
 	private nameRewrites: Record<string, string> = {};
 	private isTopLevelStatement = false;
+
+	public errors: ParserError[] = [];
 
 	constructor(private tokens: Stream<Token>, private file: FileEntry) {}
 
 	public parse() {
 		const prog: ASTProg = {
 			type: ASTType.Prog,
-			body: []
+			body: [],
+			line: 0,
+			column: 0
 		};
 
 		while (!this.tokens.eof()) {
@@ -53,62 +105,76 @@ class Parser {
 		this.isTopLevelStatement = tls;
 		const token = this.tokens.peek();
 
-		let result: AST;
-		switch (token.type) {
-			case TokenType.Identifier:
-				result = this.handleIdentifier();
-				break;
-			case TokenType.Literal:
-				result = this.handleLiteral();
-				break;
-			case TokenType.Symbol:
-				result = this.handleSymbol();
-				break;
-			case TokenType.Keyword:
-				result = this.handleKeyword();
-				break;
-			case TokenType.Operand:
-				result = this.handleOperand();
-				break;
+		try {
+			let result: AST;
+			switch (token.type) {
+				case TokenType.Identifier:
+					result = this.handleIdentifier();
+					break;
+				case TokenType.Literal:
+					result = this.handleLiteral();
+					break;
+				case TokenType.Symbol:
+					result = this.handleSymbol();
+					break;
+				case TokenType.Keyword:
+					result = this.handleKeyword();
+					break;
+				case TokenType.Operand:
+					result = this.handleOperand();
+					break;
 
-			default:
-				throw new Error(`Unexpected token type "${token.type}" value: ${token.value}`);
+				default:
+					throw new Error(`Unexpected token type "${token.type}" value: ${token.value}`);
+			}
+
+			const next = this.tokens.peek();
+			// console.log(`Ending out ${token.type} ${token.value}, next is ${next?.type} ${next?.value}`);
+			if (!next) return result;
+			// if (next.type == TokenType.Symbol && next.value == ";") {
+			// 	this.tokens.next();
+			// 	return result;
+			// }
+
+			if (next.type == TokenType.Operand && token.value != ";") {
+				return this.handleBinaryOperation(result);
+			}
+
+			return result;
+		} catch (e) {
+			console.log(`Error parsing token ${token.type} ${token.value} at ${token.line}:${token.column}: `);
+			console.log(`\t` + e.message);
+
+			this.errors.push({
+				token: token,
+				message: e.message,
+				line: token.line,
+				column: token.column
+			});
+
+			return null;
 		}
-
-		const next = this.tokens.peek();
-		// console.log(`Ending out ${token.type} ${token.value}, next is ${next?.type} ${next?.value}`);
-		if (!next) return result;
-		// if (next.type == TokenType.Symbol && next.value == ";") {
-		// 	this.tokens.next();
-		// 	return result;
-		// }
-
-		if (next.type == TokenType.Operand && token.value != ";") {
-			return this.handleBinaryOperation(result);
-		}
-
-		return result;
 	}
 
 	private handleKeyword(): AST {
 		const keyword = this.tokens.next();
 		switch (keyword.value) {
 			case "if":
-				return this.handleIfStatement();
+				return this.handleIfStatement(keyword);
 			case "while":
-				return this.handleWhileStatement();
+				return this.handleWhileStatement(keyword);
 			case "for":
-				return this.handleForStatement();
+				return this.handleForStatement(keyword);
 			case "break":
-				return this.handleBreakStatement();
+				return this.handleBreakStatement(keyword);
 			case "continue":
-				return this.handleContinueStatement();
+				return this.handleContinueStatement(keyword);
 			case "return":
-				return this.handleReturnStatement();
+				return this.handleReturnStatement(keyword);
 			case "enum":
-				return this.handleEnumStatement();
+				return this.handleEnumStatement(keyword);
 			case "struct":
-				return this.handleStructStatement();
+				return this.handleStructStatement(keyword);
 			default:
 				throw new Error(`Unexpected keyword "${keyword.value}"`);
 		}
@@ -130,19 +196,20 @@ class Parser {
 		return body;
 	}
 
-	private handleIfStatement() {
+	private handleIfStatement(orgToken: Token) {
 		this.tokens.next(); // Read (
 		const condition = this.parseAst();
 		this.tokens.next(); // Read )
 
 		const body = this.parseOptionallyBracketedBody();
+		const end = getLastPos(body);
 
 		const elIfs: ASTIfStatement[] = [];
 		this.maybeConsume(TokenType.Symbol, ";");
 		let next = this.tokens.peek();
 		while (next && next.type == TokenType.Keyword && next.value == "elseif") {
-			this.tokens.next(); // Read elseif
-			elIfs.push(this.handleIfStatement());
+			const nextIfToken = this.tokens.next(); // Read elseif
+			elIfs.push(this.handleIfStatement(nextIfToken));
 			this.maybeConsume(TokenType.Symbol, ";");
 			next = this.tokens.peek();
 		}
@@ -159,29 +226,40 @@ class Parser {
 			condition: condition,
 			body: body,
 			elseIfs: elIfs,
-			elseBody: elseBody
+			elseBody: elseBody,
+
+			line: orgToken.line,
+			column: orgToken.column,
+			lineEnd: end.line,
+			columnEnd: end.column
 		};
 
 		return ifStatement;
 	}
 
-	private handleWhileStatement() {
+	private handleWhileStatement(orgToken: Token) {
 		this.tokens.next(); // Read (
 		const condition = this.parseAst();
 		this.tokens.next(); // Read )
 
 		const body = this.parseOptionallyBracketedBody();
+		const end = getLastPos(body);
 
 		const whileStatement: ASTWhileStatement = {
 			type: ASTType.WhileStatement,
 			condition: condition,
-			body: body
+			body: body,
+
+			line: orgToken.line,
+			column: orgToken.column,
+			lineEnd: end.line,
+			columnEnd: end.column
 		};
 
 		return whileStatement;
 	}
 
-	private handleForStatement() {
+	private handleForStatement(orgToken: Token) {
 		this.throwIfNotConsume(TokenType.Symbol, "("); // Read (
 		const initialization = this.parseAst();
 		this.maybeConsume(TokenType.Symbol, ";");
@@ -191,53 +269,84 @@ class Parser {
 		this.throwIfNotConsume(TokenType.Symbol, ")"); // Read )
 
 		const body = this.parseOptionallyBracketedBody();
+		const end = getLastPos(body);
 
 		const forStatement: ASTForStatement = {
 			type: ASTType.ForStatement,
 			initialization: initialization as ASTVariableDeclaration,
 			condition: condition,
 			iteration: iteration as ASTVariableAssignment,
-			body: body
+			body: body,
+
+			line: orgToken.line,
+			column: orgToken.column,
+			lineEnd: end.line,
+			columnEnd: end.column
 		};
 
 		return forStatement;
 	}
 
-	private handleBreakStatement(): AST {
-		return { type: ASTType.BreakStatement };
+	private handleBreakStatement(orgToken: Token): AST {
+		return { type: ASTType.BreakStatement, line: orgToken.line, column: orgToken.column };
 	}
 
-	private handleContinueStatement(): AST {
-		return { type: ASTType.ContinueStatement };
+	private handleContinueStatement(orgToken: Token): AST {
+		return { type: ASTType.ContinueStatement, line: orgToken.line, column: orgToken.column };
 	}
 
-	private handleReturnStatement() {
+	private handleReturnStatement(orgToken: Token) {
 		const expression = this.parseAst();
+		const end = getLastPos(expression);
 		const returnStatement: ASTReturn = {
 			type: ASTType.Return,
-			expression: expression
+			expression: expression,
+
+			line: orgToken.line,
+			column: orgToken.column,
+			lineEnd: end.line,
+			columnEnd: end.column
 		};
 
 		return returnStatement;
 	}
 
-	private handleEnumStatement() {
-		const name = this.tokens.next().value;
-		const values: { name: string; value: number }[] = [];
+	private handleEnumStatement(orgToken: Token) {
+		const name = this.tokens.next();
+		const values: ASTEnumValue[] = [];
 
 		this.tokens.next(); // Read {
 
 		let index = 0;
+		let lastToken: Token;
 		while (!this.maybeConsume(TokenType.Symbol, "}")) {
-			const name = this.tokens.next().value;
+			const nameToken = this.tokens.next();
 			const colon = this.tokens.peek();
 			if (colon.type == TokenType.Symbol && colon.value == ":") {
 				this.tokens.next(); // Read :
-				const value = this.tokens.next().value;
-				values.push({ name: name.trim(), value: Number(value) });
+				const valueToken = this.tokens.next();
+				values.push({
+					name: nameToken.value.trim(),
+					nameLine: nameToken.line,
+					nameColumn: nameToken.column,
+
+					value: Number(valueToken.value),
+					valueLine: valueToken.line,
+					valueColumn: valueToken.column
+				});
 			} else {
-				values.push({ name: name.trim(), value: index });
+				values.push({
+					name: nameToken.value.trim(),
+					nameLine: nameToken.line,
+					nameColumn: nameToken.column,
+
+					value: index,
+					valueLine: 0,
+					valueColumn: 0
+				});
 			}
+
+			lastToken = colon;
 
 			index++;
 			this.maybeConsume(TokenType.Symbol, ",");
@@ -246,21 +355,26 @@ class Parser {
 		const enumStatement: ASTEnumStatement = {
 			type: ASTType.EnumStatement,
 			name: this.maybeRewriteName(name),
-			values: values
+			values: values,
+
+			line: orgToken.line,
+			column: orgToken.column,
+			lineEnd: lastToken.line,
+			columnEnd: lastToken.column
 		};
 
 		return enumStatement;
 	}
 
-	private handleStructStatement() {
-		const name = this.maybeRewriteName(this.tokens.next().value);
+	private handleStructStatement(orgToken: Token) {
+		const name = this.maybeRewriteName(this.tokens.next());
 		const keys: TypedKey[] = [];
 		const methods: ASTFunctionDeclaration[] = [];
 
 		this.tokens.next(); // Read {
 
 		while (this.tokens.peek().value != "}") {
-			const type = this.tokens.next().value;
+			const typeToken = this.tokens.next();
 			const isPointerType = this.maybeConsume(TokenType.Operand, "*");
 			const isArrayType = this.maybeConsume(TokenType.Symbol, "[");
 			let arraySizeExpression: AST = null;
@@ -269,69 +383,81 @@ class Parser {
 				this.throwIfNotConsume(TokenType.Symbol, "]");
 			}
 
-			const name = this.tokens.next().value;
+			const nameToken = this.tokens.next();
 
 			const next = this.tokens.peek();
 			if (next.type == TokenType.Symbol && next.value == "(") {
-				const retType = this.parseKnownSingleTokenReference(type, isPointerType);
-				methods.push(this.handleFunctionDeclaration(name, retType, true));
+				const retType = this.parseKnownSingleTokenReference(typeToken, isPointerType);
+				methods.push(this.handleFunctionDeclaration(nameToken, retType, true));
 			} else {
-				keys.push({ name: name, type: type, arrExpr: arraySizeExpression, isPointer: isPointerType || isArrayType });
+				keys.push({ name: nameToken, type: typeToken.value, arrExpr: arraySizeExpression, isPointer: isPointerType || isArrayType });
 				this.tokens.next(); // Read ;
 			}
 		}
 
-		this.tokens.next(); // Read }
+		const lastToken = this.tokens.next(); // Read }
 
 		const structStatement: ASTStructStatement = {
 			type: ASTType.StructStatement,
 			name: name,
 			keys: keys,
-			methods: methods
+			methods: methods,
+
+			line: orgToken.line,
+			column: orgToken.column,
+			lineEnd: lastToken.line,
+			columnEnd: lastToken.column
 		};
 
-		this.types.push(name);
+		this.types.push(name.value);
 
 		return structStatement;
 	}
 
 	private getStructInlineKeys() {
-		const keys: { name: string; value: AST }[] = [];
-		while (!this.maybeConsume(TokenType.Symbol, "}")) {
+		const keys: { name: Token; value: AST }[] = [];
+		let lastToken: Token;
+		while (!(lastToken = this.maybeConsumeAndReturn(TokenType.Symbol, "}"))) {
 			const key = this.tokens.next();
 
 			this.tokens.next(); // Read :
 			if (this.maybeConsume(TokenType.Symbol, "{")) {
-				const subStructKeys = this.getStructInlineKeys();
+				const { keys: subStructKeys } = this.getStructInlineKeys();
 				subStructKeys.forEach(subKey => {
-					keys.push({ name: `${key.value}.${subKey.name}`, value: subKey.value });
+					const newToken = JSON.parse(JSON.stringify(key));
+					newToken.value = `${key.value}.${subKey.name.value}`;
+					keys.push({ name: newToken, value: subKey.value });
 				});
 			} else {
 				const value = this.parseAst();
-				keys.push({ name: key.value, value: value });
+				keys.push({ name: key, value: value });
 			}
 
 			this.maybeConsume(TokenType.Symbol, ",");
 		}
 
-		return keys;
+		return { keys, lastToken };
 	}
 
-	private handleInlineAssignment() {
+	private handleInlineAssignment(orgToken: Token) {
 		const next = this.tokens.peek();
 		const after = this.tokens.peekOver();
 
 		if (next.type == TokenType.Identifier && after.type == TokenType.Symbol && after.value == ":") {
 			// Struct assignment
-			const keys = this.getStructInlineKeys();
+			const { keys, lastToken } = this.getStructInlineKeys();
 			const structAssignment: ASTInlineStructAssignment = {
 				type: ASTType.InlineStructAssignment,
-				keys: keys
+				keys: keys,
+
+				line: orgToken.line,
+				column: orgToken.column,
+				lineEnd: lastToken.line,
+				columnEnd: lastToken.column
 			};
 			return structAssignment;
 		} else {
 			// Array assignment
-
 			const values: AST[] = [];
 			while (true) {
 				const next = this.tokens.peek();
@@ -343,11 +469,16 @@ class Parser {
 				if (maybeComma.type == TokenType.Symbol && maybeComma.value == ",") this.tokens.next();
 			}
 
-			this.tokens.next(); // Read }
+			const lastToken = this.tokens.next(); // Read }
 
 			const arrayAssignment: ASTInlineArrayAssignment = {
 				type: ASTType.InlineArrayAssignment,
-				values: values
+				values: values,
+
+				line: orgToken.line,
+				column: orgToken.column,
+				lineEnd: lastToken.line,
+				columnEnd: lastToken.column
 			};
 
 			return arrayAssignment;
@@ -364,10 +495,10 @@ class Parser {
 			}
 
 			case "{":
-				return this.handleInlineAssignment();
+				return this.handleInlineAssignment(symbol);
 
 			case ";": {
-				const semi: ASTSemi = { type: ASTType.Semi };
+				const semi: ASTSemi = { type: ASTType.Semi, line: symbol.line, column: symbol.column };
 				return semi;
 			}
 
@@ -376,12 +507,18 @@ class Parser {
 		}
 	}
 
-	private handlePointerDeref() {
+	private handlePointerDeref(orgToken: Token) {
 		const derefRef = this.parseAst();
+		const end = getLastPos(derefRef);
 		if (derefRef.type == ASTType.Reference) {
 			const deref: ASTDereference = {
 				type: ASTType.Dereference,
-				expression: derefRef
+				expression: derefRef,
+
+				line: orgToken.line,
+				column: orgToken.column,
+				lineEnd: end.line,
+				columnEnd: end.column
 			};
 
 			return deref;
@@ -394,7 +531,12 @@ class Parser {
 
 		const deref: ASTDereference = {
 			type: ASTType.Dereference,
-			expression: derefRef
+			expression: derefRef,
+
+			line: orgToken.line,
+			column: orgToken.column,
+			lineEnd: end.line,
+			columnEnd: end.column
 		};
 
 		return deref;
@@ -404,13 +546,19 @@ class Parser {
 		const operand = this.tokens.next();
 		switch (operand.value) {
 			case "*": {
-				return this.handlePointerDeref();
+				return this.handlePointerDeref(operand);
 			}
 			case "&": {
 				const ref = this.parseAst() as ASTReference;
+				const end = getLastPos(ref);
 				const getAddress: ASTGetAddress = {
 					type: ASTType.GetAddress,
-					reference: ref
+					reference: ref,
+
+					line: operand.line,
+					column: operand.column,
+					lineEnd: end.line,
+					columnEnd: end.column
 				};
 
 				return getAddress;
@@ -419,10 +567,16 @@ class Parser {
 			case "~":
 			case "!": {
 				const expression = this.parseAst();
+				const end = getLastPos(expression);
 				const unary: ASTUnaryOperation = {
 					type: ASTType.UnaryOperation,
 					operator: operand.value,
-					expression: expression
+					expression: expression,
+
+					line: operand.line,
+					column: operand.column,
+					lineEnd: end.line,
+					columnEnd: end.column
 				};
 
 				return unary;
@@ -447,9 +601,11 @@ class Parser {
 			const rightHand = this.handleBinaryOperation(this.parseAst(), opPrec);
 			const binOp: AST = {
 				type: ASTType.BinaryOperation,
-				operator: operator.value,
+				operator: operator,
 				left: leftHand,
-				right: rightHand
+				right: rightHand,
+
+				...correctOrderPos(leftHand, rightHand)
 			};
 
 			return this.handleBinaryOperation(binOp, prec);
@@ -476,13 +632,19 @@ class Parser {
 				const num = parseInt(restNum, base);
 				const numAst: ASTNumber = {
 					type: ASTType.Number,
-					value: num
+					value: num,
+
+					line: token.line,
+					column: token.column
 				};
 				return numAst;
 			} else {
 				const num: ASTNumber = {
 					type: ASTType.Number,
-					value: Number(token.value)
+					value: Number(token.value),
+
+					line: token.line,
+					column: token.column
 				};
 				return num;
 			}
@@ -490,31 +652,40 @@ class Parser {
 
 		const str: ASTString = {
 			type: ASTType.String,
-			value: token.value
+			value: token.value,
+
+			line: token.line,
+			column: token.column
 		};
 
 		return str;
 	}
 
-	private parseKnownSingleTokenReference(token: string, pointer: boolean) {
+	private parseKnownSingleTokenReference(token: Token, pointer: boolean) {
 		const ref: ASTReference = {
 			type: ASTType.Reference,
 			arrayIndex: null,
 			key: token,
 			child: null,
-			dereference: pointer
+			dereference: pointer,
+
+			line: token.line,
+			column: token.column
 		};
 
 		return ref;
 	}
 
-	private parseReference(firstIdent: string) {
+	private parseReference(firstIdent: Token) {
 		const topRef: ASTReference = {
 			type: ASTType.Reference,
 			arrayIndex: null,
 			key: firstIdent,
 			child: null,
-			dereference: false
+			dereference: false,
+
+			line: firstIdent.line,
+			column: firstIdent.column
 		};
 		let ref = topRef;
 
@@ -524,13 +695,16 @@ class Parser {
 
 			const dotOrBracket = this.tokens.next();
 			if (dotOrBracket.type == TokenType.Symbol && (dotOrBracket.value == "." || dotOrBracket.value == "->")) {
-				const key = this.tokens.next().value;
+				const keyToken = this.tokens.next();
 				const newRef: ASTReference = {
 					type: ASTType.Reference,
 					arrayIndex: null,
-					key: key,
+					key: keyToken,
 					child: null,
-					dereference: dotOrBracket.value == "->"
+					dereference: dotOrBracket.value == "->",
+
+					line: dotOrBracket.line,
+					column: dotOrBracket.column
 				};
 
 				ref.child = newRef;
@@ -538,13 +712,18 @@ class Parser {
 			} else {
 				// Array reference
 				const expression = this.parseAst();
-				this.tokens.next(); // Read ]
+				const lastToken = this.tokens.next(); // Read ]
 				const newRef: ASTReference = {
 					type: ASTType.Reference,
 					arrayIndex: expression,
 					key: null,
 					child: null,
-					dereference: true
+					dereference: true,
+
+					line: dotOrBracket.line,
+					column: dotOrBracket.column,
+					lineEnd: lastToken.line,
+					columnEnd: lastToken.column
 				};
 				// ref.dereference = true;
 				ref.child = newRef;
@@ -559,7 +738,7 @@ class Parser {
 
 	private handleIdentifier() {
 		const identifier = this.tokens.next();
-		const reference = this.parseReference(identifier.value);
+		const reference = this.parseReference(identifier);
 
 		const next = this.tokens.peek();
 
@@ -601,16 +780,24 @@ class Parser {
 						reference: reference,
 						expression: {
 							type: ASTType.BinaryOperation,
-							operator: op.value,
+							operator: op,
 							left: reference,
 							right: {
 								type: ASTType.Number,
-								value: 1
-							}
-						}
+								value: 1,
+								line: op.line,
+								column: op.column
+							},
+							line: op.line,
+							column: op.column
+						},
+						line: op.line,
+						column: op.column
 					},
 					ret: reference,
-					returnBefore: true
+					returnBefore: true,
+
+					...correctOrderPos(reference, op)
 				};
 
 				return unary;
@@ -623,17 +810,22 @@ class Parser {
 				const op = this.tokens.next(); // Read operator
 				this.tokens.next(); // Read =
 
+				const right = this.parseAst();
 				const binary: ASTBinaryOperation = {
 					type: ASTType.BinaryOperation,
-					operator: op.value,
+					operator: op,
 					left: reference,
-					right: this.parseAst()
+					right: right,
+
+					...correctOrderPos(reference, right)
 				};
 
 				const assignment: ASTVariableAssignment = {
 					type: ASTType.VariableAssignment,
 					reference: reference,
-					expression: binary
+					expression: binary,
+
+					...correctOrderPos(reference, binary)
 				};
 
 				return assignment;
@@ -650,7 +842,9 @@ class Parser {
 		const assignment: ASTVariableAssignment = {
 			type: ASTType.VariableAssignment,
 			reference: ref,
-			expression: expression
+			expression: expression,
+
+			...correctOrderPos(ref, expression)
 		};
 
 		return assignment;
@@ -667,17 +861,24 @@ class Parser {
 
 		this.maybeRewriteRef(ref);
 
+		const end = getLastPos(args, ref);
 		const funcCall: ASTFunctionCall = {
 			type: ASTType.FunctionCall,
 			reference: ref,
-			arguments: args
+			arguments: args,
+
+			line: ref.line,
+			column: ref.column,
+
+			lineEnd: end.line,
+			columnEnd: end.column
 		};
 
 		return funcCall;
 	}
 
 	private handleDeclaration(ref: ASTReference) {
-		const name = this.tokens.next().value;
+		const nameToken = this.tokens.next();
 
 		const next = this.tokens.peek();
 		if (next.type != TokenType.Symbol) {
@@ -685,12 +886,12 @@ class Parser {
 		}
 
 		// Variable declaration
-		if (next.value == "=" || next.value == ";") return this.handleVariableDeclaration(name, ref);
+		if (next.value == "=" || next.value == ";") return this.handleVariableDeclaration(nameToken, ref);
 		// Function declaration
-		if (next.value == "(") return this.handleFunctionDeclaration(name, ref);
+		if (next.value == "(") return this.handleFunctionDeclaration(nameToken, ref);
 	}
 
-	private handleVariableDeclaration(name: string, varTypeRef: ASTReference) {
+	private handleVariableDeclaration(name: Token, varTypeRef: ASTReference) {
 		const hasExpression = this.maybeConsume(TokenType.Symbol, "=");
 		let arraySizeExpression: AST = null;
 
@@ -708,14 +909,20 @@ class Parser {
 			name: this.maybeRewriteName(name),
 			varType: varTypeRef,
 			expression: expression,
-			arraySizeExpression: arraySizeExpression
+			arraySizeExpression: arraySizeExpression,
+
+			line: name.line,
+			column: name.column,
+			lineEnd: varTypeRef.line,
+			columnEnd: varTypeRef.column
 		};
 
 		return decl;
 	}
 
-	private handleFunctionDeclaration(name: string, returnTypeRef: ASTReference, preventRewrite = false) {
-		if (!preventRewrite) name = this.maybeRewriteName(name, true);
+	private handleFunctionDeclaration(nameToken: Token, returnTypeRef: ASTReference, preventRewrite = false) {
+		// let name = nameToken.value;
+		if (!preventRewrite) nameToken = this.maybeRewriteName(nameToken, true);
 		this.tokens.next(); // Read (
 
 		const params: TypedKey[] = [];
@@ -726,7 +933,7 @@ class Parser {
 			const paramType = this.tokens.next();
 			const isPointer = this.maybeConsume(TokenType.Operand, "*");
 			const paramName = this.tokens.next();
-			params.push({ type: paramType.value, name: paramName.value, isPointer: isPointer });
+			params.push({ type: paramType.value, name: paramName, isPointer: isPointer });
 		}
 
 		const openBracket = this.tokens.peek(); // Peak for {
@@ -737,38 +944,57 @@ class Parser {
 				body.push(this.parseAst());
 			}
 		} else {
+			const retAst = this.parseAst();
+			const end = getLastPos(retAst);
 			const returnAst: ASTReturn = {
 				type: ASTType.Return,
-				expression: this.parseAst()
+				expression: retAst,
+
+				line: nameToken.line,
+				column: nameToken.column,
+				lineEnd: end.line,
+				columnEnd: end.column
 			};
 			body.push(returnAst);
 		}
 
+		const end = getLastPos(body);
 		const func: ASTFunctionDeclaration = {
 			type: ASTType.FunctionDeclaration,
-			name: this.maybeRewriteName(name),
+			name: this.maybeRewriteName(nameToken),
 			parameters: params,
 			body: body,
-			returnType: returnTypeRef
+			returnType: returnTypeRef,
+
+			line: nameToken.line,
+			column: nameToken.column,
+			lineEnd: end.line,
+			columnEnd: end.column
 		};
 
 		return func;
 	}
 
-	private maybeRewriteName(name: string, allowNonTls = false) {
-		if (this.nameRewrites[name]) return this.nameRewrites[name];
-		if (this.file.exportSymbols.includes(name) || this.file.isRoot) return name;
-		if (name.startsWith("__")) return name;
+	private maybeRewriteName(name: Token, allowNonTls = false): Token {
+		const newNameToken = JSON.parse(JSON.stringify(name));
+		if (this.nameRewrites[name.value]) {
+			newNameToken.value = this.nameRewrites[name.value];
+			return newNameToken;
+		}
+
+		if (this.file.exportSymbols.includes(name.value) || this.file.isRoot) return name;
+		if (name.value.startsWith("__")) return name;
 		if (!this.isTopLevelStatement && !allowNonTls) return name;
 
-		const newName = `__${this.file.name}_${name}`;
-		this.nameRewrites[name] = newName;
-		return newName;
+		const newName = `__${this.file.name}_${name.value}`;
+		this.nameRewrites[name.value] = newName;
+		newNameToken.value = newName;
+		return newNameToken;
 	}
 
 	private maybeRewriteRef(ref: ASTReference) {
-		if (this.nameRewrites[ref.key]) {
-			ref.key = this.nameRewrites[ref.key];
+		if (this.nameRewrites[ref.key.value]) {
+			ref.key.value = this.nameRewrites[ref.key.value];
 		}
 	}
 
@@ -782,10 +1008,19 @@ class Parser {
 		return false;
 	}
 
+	private maybeConsumeAndReturn(type: TokenType, value: string) {
+		const next = this.tokens.peek();
+		if (next.type == type && next.value == value) {
+			return this.tokens.next();
+		}
+
+		return null;
+	}
+
 	private throwIfNotConsume(type: TokenType, value: string) {
 		const consumed = this.maybeConsume(type, value);
 		if (!consumed) throw new Error(`Expected ${type} ${value}`);
 	}
 }
 
-export { Parser };
+export { Parser, ParserError };

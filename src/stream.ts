@@ -1,3 +1,7 @@
+function isPredicate<T>(value: T | ((arg: T) => boolean)): value is (arg: T) => boolean {
+	return typeof value == "function";
+}
+
 class Stream<T> {
 	private index: number = 0;
 	constructor(private items: T[]) {}
@@ -25,12 +29,19 @@ class Stream<T> {
 		return result;
 	}
 
-	skipUntil(value: T) {
-		while (!this.eof() && this.next() != value) {}
+	skipUntil(value: (arg: T) => boolean): void;
+	skipUntil(value: T): void;
+	skipUntil(value: T | ((arg: T) => boolean)): void {
+		if (isPredicate(value)) while (!this.eof() && !value(this.next())) {}
+		else while (!this.eof() && this.next() != value) {}
 	}
 
 	eof(): boolean {
 		return this.index >= this.items.length;
+	}
+
+	reset(): void {
+		this.index = 0;
 	}
 
 	_all(): T[] {

@@ -1,11 +1,17 @@
 import { Stream } from "../stream.js";
 import { Token, Tokenizer } from "./tokenizer.js";
 
+interface PosChar {
+	char: string;
+	line: number;
+	column: number;
+}
+
 class PreCompiler {
 	private defines: { name: string; value: string; tokens: Token[] }[] = [];
 	constructor(private input: string) {}
 
-	public preTokenize(): Stream<string> {
+	public preTokenize(): Stream<PosChar> {
 		const definesExpr = this.input.matchAll(/#define (\w.*) (.*)/g);
 		this.defines = [...definesExpr].map(d => {
 			return {
@@ -17,14 +23,36 @@ class PreCompiler {
 
 		this.tokenizeDefines();
 
-		const output = this.input
-			.trim()
-			.split("\n")
-			.filter(l => !l.startsWith("#"))
-			.join("\n")
-			.split("");
+		let currentLine = 1;
+		let currentColumn = 1;
+		const posChars = this.input.split("").map(c => {
+			const posChar = {
+				char: c,
+				line: currentLine,
+				column: currentColumn
+			};
 
-		return new Stream(output);
+			if (c == "\n") {
+				currentLine++;
+				currentColumn = 1;
+			} else currentColumn++;
+
+			return posChar;
+		});
+
+		for (let i = 0; i < posChars.length; i++) {
+			const cur = posChars[i];
+			if (cur.char == "#") {
+				let next = posChars[i + 1];
+				while (next && next.char != "\n") {
+					posChars.splice(i + 1, 1);
+					next = posChars[i + 1];
+				}
+				posChars.splice(i, 1);
+			}
+		}
+
+		return new Stream(posChars);
 	}
 
 	private accumulateTokens(stream: Stream<Token>): Token[] {
@@ -36,7 +64,7 @@ class PreCompiler {
 
 	private tokenizeDefines() {
 		this.defines.forEach(d => {
-			const stream = new Stream(d.value.split(""));
+			const stream = new Stream<PosChar>(d.value.split("").map(c => ({ char: c, line: 0, column: 0 })));
 			const tokenizer = new Tokenizer(stream);
 			const tokens = tokenizer.parse();
 			d.tokens = this.accumulateTokens(tokens);
@@ -63,4 +91,4 @@ class PreCompiler {
 	}
 }
 
-export { PreCompiler };
+export { PreCompiler, PosChar };

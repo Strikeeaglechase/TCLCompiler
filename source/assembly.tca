@@ -1,0 +1,16 @@
+#define reg R5
+#define pc R1
+#define sp R2
+#define fp R3
+
+# mov 5 reg
+# :loop
+# add 1 reg reg
+# cmplt reg 20 R6
+# movif loop R6 pc
+# 
+# halt
+
+mov 5 reg
+writeoff 72 reg 3
+readoff reg 3 reg

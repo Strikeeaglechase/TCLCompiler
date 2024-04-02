@@ -1,0 +1,36 @@
+// #import ./ioprint.tcl
+// Enable first 4 digits
+// enableSevenSeg(0b1111)
+// 
+// int a = 1;
+// int b = 1;
+// int c = 0;
+// while(c < 1000) {
+// 	c = a + b;
+// 	a = b;
+// 	b = c;
+// 	print(c);
+// }
+
+
+#define debug_io 65537
+
+struct Point {
+	int x;
+	int y;
+}
+
+Point* getPoint() {
+	Point* pt = malloc(sizeof(Point));
+	pt->x = 19;
+	pt->y = 25;
+
+	return pt;
+}
+
+void hello() {
+	Point* pt = getPoint();
+	write(debug_io, pt->x);
+}
+
+hello();
